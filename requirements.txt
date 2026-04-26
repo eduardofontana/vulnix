@@ -6,3 +6,7 @@ playwright>=1.40.0
 reportlab>=4.0.0
 dnspython>=2.4.0
 cryptography>=41.0.0
+# Optional: required for --whois
+python-whois>=0.9.0
+# Optional: required to run test suite
+pytest>=8.0.0
