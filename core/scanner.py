@@ -261,11 +261,27 @@ class ScanEngine:
         self.do_cms: bool = False
         self._error_collectors: Dict[str, ModuleErrorCollector] = {}
         self._captured_error_signatures: Set[tuple] = set()
+        self.event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 
     def _log(self, message: str) -> None:
         """Log verbose message."""
         if self.verbose:
             print(f"[VERBOSE] {message}")
+
+    def _emit_event(self, event_type: str, **data: Any) -> None:
+        """Emit structured scanner events to external observers."""
+        if not self.event_callback:
+            return
+        event = {
+            "type": event_type,
+            "timestamp": datetime.now().isoformat(),
+            **data,
+        }
+        try:
+            self.event_callback(event)
+        except Exception:
+            # Telemetry failures must never stop scan execution.
+            return
 
     def _infer_module_from_finding(self, finding_data: Dict[str, Any]) -> str:
         """Infer module name for reporting enrichment."""
@@ -328,6 +344,13 @@ class ScanEngine:
         if signature not in self._captured_error_signatures:
             self._captured_error_signatures.add(signature)
             self.scan_result.errors.append(latest_error)
+            self._emit_event(
+                "module_error",
+                module=module,
+                phase=phase,
+                url=url,
+                error=str(error),
+            )
 
     async def _execute_step(
         self,
@@ -339,7 +362,17 @@ class ScanEngine:
     ) -> Any:
         """Execute a scan step and convert failures to structured errors."""
         try:
-            return await operation()
+            self._emit_event("module_started", module=module, phase=phase, url=url)
+            result = await operation()
+            result_count = len(result) if isinstance(result, (list, dict, set, tuple)) else None
+            self._emit_event(
+                "module_completed",
+                module=module,
+                phase=phase,
+                url=url,
+                result_count=result_count,
+            )
+            return result
         except Exception as e:
             self._record_error(module, url, e, phase)
             return default
@@ -566,6 +599,7 @@ class ScanEngine:
         self,
         target: str,
         progress_callback: Optional[Callable[[str], None]] = None,
+        event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> ScanResult:
         """Perform a full vulnerability scan."""
         target_url = target if target.startswith(("http://", "https://")) else f"https://{target}"
@@ -573,6 +607,9 @@ class ScanEngine:
 
         self.scan_result = ScanResult(target=target, start_time=start_time)
         self._captured_error_signatures.clear()
+        self.event_callback = event_callback
+        self.request_engine.event_callback = event_callback
+        self._emit_event("scan_started", target=target_url)
 
         if progress_callback:
             progress_callback("Crawling target...")
@@ -1461,10 +1498,24 @@ class ScanEngine:
                 details=details,
             )
             self.scan_result.findings.append(finding)
+            self._emit_event(
+                "finding_detected",
+                module=finding.module,
+                severity=finding.severity,
+                finding_type=finding.type,
+                url=finding.url,
+            )
 
         self.scan_result.end_time = datetime.now().isoformat()
         self.scan_result.scanned_endpoints = len(endpoints)
         self._collect_all_module_errors()
+        self._emit_event(
+            "scan_completed",
+            target=target_url,
+            findings=len(self.scan_result.findings),
+            errors=len(self.scan_result.errors),
+            scanned_endpoints=self.scan_result.scanned_endpoints,
+        )
 
         return self.scan_result
 

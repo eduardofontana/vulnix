@@ -6,8 +6,9 @@ Request Engine Module - Handles HTTP requests with async support
 import asyncio
 import time
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 import random
+from datetime import datetime
 
 from core.error_collector import ModuleErrorCollector
 
@@ -47,6 +48,19 @@ class RequestEngine:
         self._client: Optional[httpx.AsyncClient] = None
         self.proxy_url = proxy_url
         self.error_collector = ModuleErrorCollector("request_engine")
+        self.event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def _emit_event(self, event: Dict[str, Any]) -> None:
+        """Emit structured request events to external observers."""
+        if not self.event_callback:
+            return
+        payload = dict(event)
+        payload.setdefault("timestamp", datetime.now().isoformat())
+        try:
+            self.event_callback(payload)
+        except Exception:
+            # Observability callback failures must never break scanning.
+            return
 
     def _get_random_user_agent(self) -> str:
         """Return a random user agent."""
@@ -91,6 +105,15 @@ class RequestEngine:
 
         for attempt in range(self.max_retries):
             try:
+                started_at = time.perf_counter()
+                self._emit_event(
+                    {
+                        "type": "request_started",
+                        "method": method,
+                        "url": url,
+                        "attempt": attempt + 1,
+                    }
+                )
                 response = await self._client.request(
                     method=method,
                     url=url,
@@ -106,9 +129,31 @@ class RequestEngine:
                 if hasattr(response, "cookies"):
                     self.session_cookies.update(response.cookies)
 
+                latency_ms = (time.perf_counter() - started_at) * 1000
+                self._emit_event(
+                    {
+                        "type": "request_completed",
+                        "method": method,
+                        "url": url,
+                        "attempt": attempt + 1,
+                        "status_code": response.status_code,
+                        "latency_ms": round(latency_ms, 2),
+                    }
+                )
                 return response
 
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+                latency_ms = (time.perf_counter() - started_at) * 1000
+                self._emit_event(
+                    {
+                        "type": "request_failed",
+                        "method": method,
+                        "url": url,
+                        "attempt": attempt + 1,
+                        "error": str(e),
+                        "latency_ms": round(latency_ms, 2),
+                    }
+                )
                 self.error_collector.add(url, e, f"request_retryable_{method.lower()}")
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(self.delay * (attempt + 1))
@@ -116,6 +161,17 @@ class RequestEngine:
                 return None
 
             except Exception as e:
+                latency_ms = (time.perf_counter() - started_at) * 1000
+                self._emit_event(
+                    {
+                        "type": "request_failed",
+                        "method": method,
+                        "url": url,
+                        "attempt": attempt + 1,
+                        "error": str(e),
+                        "latency_ms": round(latency_ms, 2),
+                    }
+                )
                 self.error_collector.add(url, e, f"request_unexpected_{method.lower()}")
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(self.delay * (attempt + 1))

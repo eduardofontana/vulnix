@@ -434,9 +434,50 @@ Examples:
         help="Keep only high-confidence findings in terminal output and reports",
     )
 
+    parser.add_argument(
+        "--list-modules",
+        action="store_true",
+        help="List available modules for --module filtering and exit",
+    )
+
+    parser.add_argument(
+        "--module",
+        action="append",
+        help="Run only selected module(s). Can be repeated or comma-separated",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print execution plan without running requests",
+    )
+
+    parser.add_argument(
+        "--debug-events",
+        action="store_true",
+        help="Enable event timeline capture (defaults to reports/scan_events.jsonl)",
+    )
+
+    parser.add_argument(
+        "--events-output",
+        type=str,
+        help="Write event timeline in JSONL format to the given file",
+    )
+
+    parser.add_argument(
+        "--max-runtime",
+        type=int,
+        help="Maximum runtime in seconds before scan timeout",
+    )
+
     args = parser.parse_args()
 
     cli = VulnixCLI()
+
+    if args.list_modules:
+        cli.print_banner()
+        cli.print_available_modules()
+        return 0
 
     async def _warm_cve_cache() -> None:
         client = CVEIntelClient()
@@ -604,6 +645,12 @@ Examples:
                 baseline_file=args.baseline,
                 diff_output=args.diff_output,
                 high_confidence_only=args.high_confidence_only,
+                debug_events=args.debug_events,
+                events_output=args.events_output,
+                module_filter=args.module,
+                list_modules=args.list_modules,
+                dry_run=args.dry_run,
+                max_runtime=args.max_runtime,
             )
         )
 

@@ -5,9 +5,12 @@ CLI Commands Module
 
 import asyncio
 import json
+from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.panel import Panel
@@ -44,9 +47,284 @@ theme = Theme(
 class VulnixCLI:
     """CLI interface for VULNIX."""
 
+    MODULE_HELP: Dict[str, str] = {
+        "sqli": "SQL injection checks",
+        "xss": "XSS checks",
+        "headers": "Security header analysis",
+        "dirscan": "Directory scanning",
+        "csrf": "CSRF checks",
+        "idor": "IDOR checks",
+        "auth": "Authentication checks",
+        "http-desync": "HTTP request smuggling/desync checks",
+        "cloud-metadata": "Cloud metadata SSRF checks",
+        "waf": "WAF detection",
+        "waf-bypass": "WAF bypass checks",
+        "websocket": "WebSocket security checks",
+        "cve-intel": "CVE correlation (NVD/KEV/EPSS)",
+        "subs": "Subdomain enumeration",
+        "subs-brute": "Subdomain brute-force enumeration",
+        "param-fuzz": "Hidden parameter fuzzing",
+        "cors": "CORS checks",
+        "ssrf": "SSRF checks",
+        "redirect": "Open redirect checks",
+        "tech": "Technology fingerprinting",
+        "jwt": "JWT handling checks",
+        "dns": "DNS lookup",
+        "port-scan": "Port scanning",
+        "ssl": "SSL certificate analysis",
+        "tls-check": "TLS vulnerability checks",
+        "robots": "robots.txt analysis",
+        "sitemap": "sitemap.xml analysis",
+        "links": "Link extraction",
+        "graphql": "GraphQL scanning",
+        "rate-limit": "Rate limiting checks",
+        "takeover": "Subdomain takeover checks",
+        "wayback": "Wayback snapshot analysis",
+        "whois": "WHOIS lookup",
+        "js-secrets": "JavaScript secret extraction",
+        "params": "Hidden parameter discovery",
+        "fuzz": "Directory/content fuzzing",
+        "pattern": "Sensitive pattern matching",
+        "ssti": "SSTI checks",
+        "lfi": "LFI/RFI checks",
+        "race": "Race condition checks",
+        "xxe": "XXE checks",
+        "dom": "DOM vulnerability checks",
+        "cms": "CMS detection",
+    }
+
+    MODULE_ORDER: List[str] = list(MODULE_HELP.keys())
+
     def __init__(self):
         self.console = Console(theme=theme)
         self.report_generator = ReportGenerator()
+
+    def print_available_modules(self) -> None:
+        """Print modules available for --module filtering."""
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Module", style="cyan", width=18)
+        table.add_column("Description", width=70)
+        for module_name in self.MODULE_ORDER:
+            table.add_row(module_name, self.MODULE_HELP[module_name])
+        self.console.print(Panel(table, title="Available Modules", border_style="cyan"))
+
+    @staticmethod
+    def _normalize_module_filter(module_filter: Optional[List[str]]) -> set[str]:
+        """Normalize module selector list from CLI values."""
+        if not module_filter:
+            return set()
+        normalized: set[str] = set()
+        for raw in module_filter:
+            for token in str(raw).split(","):
+                value = token.strip().lower().replace("_", "-")
+                if not value:
+                    continue
+                if value == "extract-links":
+                    value = "links"
+                normalized.add(value)
+        return normalized
+
+    def _collect_active_modules(self, scanner: ScanEngine, vuln_config: VulnerabilityConfig) -> List[str]:
+        """Build active module list from current scanner state."""
+        active: List[str] = []
+        state_checks = {
+            "sqli": vuln_config.enable_sqli,
+            "xss": vuln_config.enable_xss,
+            "headers": vuln_config.enable_headers,
+            "dirscan": vuln_config.enable_dirscan,
+            "csrf": vuln_config.enable_csrf,
+            "idor": vuln_config.enable_idor,
+            "auth": vuln_config.enable_auth,
+            "http-desync": vuln_config.enable_http_desync,
+            "cloud-metadata": vuln_config.enable_cloud_metadata,
+            "waf": vuln_config.enable_waf_detection,
+            "waf-bypass": vuln_config.enable_waf_bypass,
+            "websocket": vuln_config.enable_websocket,
+            "cve-intel": vuln_config.enable_cve_intel,
+            "subs": getattr(scanner, "do_subdomain_enum", False),
+            "subs-brute": getattr(scanner, "subdomain_bruteforce", False),
+            "param-fuzz": getattr(scanner, "do_param_fuzz", False),
+            "cors": getattr(scanner, "do_cors_check", False),
+            "ssrf": getattr(scanner, "do_ssrf_check", False),
+            "redirect": getattr(scanner, "do_redirect_check", False),
+            "tech": getattr(scanner, "do_tech_fingerprint", False),
+            "jwt": getattr(scanner, "do_jwt_check", False),
+            "dns": getattr(scanner, "do_dns_lookup", False),
+            "port-scan": getattr(scanner, "do_port_scan", False),
+            "ssl": getattr(scanner, "do_ssl_analysis", False),
+            "tls-check": getattr(scanner, "do_tls_check", False),
+            "robots": getattr(scanner, "do_robots_analysis", False),
+            "sitemap": getattr(scanner, "do_sitemap_analysis", False),
+            "links": getattr(scanner, "do_link_extraction", False),
+            "graphql": getattr(scanner, "do_graphql_scan", False),
+            "rate-limit": getattr(scanner, "do_rate_limit", False),
+            "takeover": getattr(scanner, "do_takeover", False),
+            "wayback": getattr(scanner, "do_wayback", False),
+            "whois": getattr(scanner, "do_whois", False),
+            "js-secrets": getattr(scanner, "do_js_secrets", False),
+            "params": getattr(scanner, "do_param_discovery", False),
+            "fuzz": getattr(scanner, "do_content_fuzz", False),
+            "pattern": getattr(scanner, "do_pattern_scan", False),
+            "ssti": getattr(scanner, "do_ssti", False),
+            "lfi": getattr(scanner, "do_lfi", False),
+            "race": getattr(scanner, "do_race", False),
+            "xxe": getattr(scanner, "do_xxe", False),
+            "dom": getattr(scanner, "do_dom", False),
+            "cms": getattr(scanner, "do_cms", False),
+        }
+        for module_name in self.MODULE_ORDER:
+            if state_checks.get(module_name, False):
+                active.append(module_name)
+        return active
+
+    def _apply_module_filter(
+        self,
+        scanner: ScanEngine,
+        vuln_config: VulnerabilityConfig,
+        module_filter: set[str],
+    ) -> List[str]:
+        """Apply --module filter by disabling all modules then enabling selected ones."""
+        if not module_filter:
+            return []
+
+        # Disable everything first.
+        vuln_config.enable_sqli = False
+        vuln_config.enable_xss = False
+        vuln_config.enable_headers = False
+        vuln_config.enable_dirscan = False
+        vuln_config.enable_csrf = False
+        vuln_config.enable_idor = False
+        vuln_config.enable_auth = False
+        vuln_config.enable_http_desync = False
+        vuln_config.enable_cloud_metadata = False
+        vuln_config.enable_waf_detection = False
+        vuln_config.enable_waf_bypass = False
+        vuln_config.enable_websocket = False
+        vuln_config.enable_cve_intel = False
+
+        scanner.quick_scan = False
+        scanner.do_subdomain_enum = False
+        scanner.subdomain_bruteforce = False
+        scanner.do_param_fuzz = False
+        scanner.do_cors_check = False
+        scanner.do_ssrf_check = False
+        scanner.do_redirect_check = False
+        scanner.do_tech_fingerprint = False
+        scanner.do_jwt_check = False
+        scanner.do_dns_lookup = False
+        scanner.do_port_scan = False
+        scanner.do_ssl_analysis = False
+        scanner.do_tls_check = False
+        scanner.do_robots_analysis = False
+        scanner.do_sitemap_analysis = False
+        scanner.do_link_extraction = False
+        scanner.do_graphql_scan = False
+        scanner.do_rate_limit = False
+        scanner.do_takeover = False
+        scanner.do_wayback = False
+        scanner.do_whois = False
+        scanner.do_js_secrets = False
+        scanner.do_param_discovery = False
+        scanner.do_content_fuzz = False
+        scanner.do_pattern_scan = False
+        scanner.do_ssti = False
+        scanner.do_lfi = False
+        scanner.do_race = False
+        scanner.do_xxe = False
+        scanner.do_dom = False
+        scanner.do_cms = False
+
+        unknown = [name for name in sorted(module_filter) if name not in self.MODULE_HELP]
+        for module_name in module_filter:
+            if module_name == "sqli":
+                vuln_config.enable_sqli = True
+            elif module_name == "xss":
+                vuln_config.enable_xss = True
+            elif module_name == "headers":
+                vuln_config.enable_headers = True
+            elif module_name == "dirscan":
+                vuln_config.enable_dirscan = True
+            elif module_name == "csrf":
+                vuln_config.enable_csrf = True
+            elif module_name == "idor":
+                vuln_config.enable_idor = True
+            elif module_name == "auth":
+                vuln_config.enable_auth = True
+            elif module_name == "http-desync":
+                vuln_config.enable_http_desync = True
+            elif module_name == "cloud-metadata":
+                vuln_config.enable_cloud_metadata = True
+            elif module_name == "waf":
+                vuln_config.enable_waf_detection = True
+            elif module_name == "waf-bypass":
+                vuln_config.enable_waf_bypass = True
+            elif module_name == "websocket":
+                vuln_config.enable_websocket = True
+            elif module_name == "cve-intel":
+                vuln_config.enable_cve_intel = True
+            elif module_name == "subs":
+                scanner.do_subdomain_enum = True
+            elif module_name == "subs-brute":
+                scanner.do_subdomain_enum = True
+                scanner.subdomain_bruteforce = True
+            elif module_name == "param-fuzz":
+                scanner.do_param_fuzz = True
+            elif module_name == "cors":
+                scanner.do_cors_check = True
+            elif module_name == "ssrf":
+                scanner.do_ssrf_check = True
+            elif module_name == "redirect":
+                scanner.do_redirect_check = True
+            elif module_name == "tech":
+                scanner.do_tech_fingerprint = True
+            elif module_name == "jwt":
+                scanner.do_jwt_check = True
+            elif module_name == "dns":
+                scanner.do_dns_lookup = True
+            elif module_name == "port-scan":
+                scanner.do_port_scan = True
+            elif module_name == "ssl":
+                scanner.do_ssl_analysis = True
+            elif module_name == "tls-check":
+                scanner.do_tls_check = True
+            elif module_name == "robots":
+                scanner.do_robots_analysis = True
+            elif module_name == "sitemap":
+                scanner.do_sitemap_analysis = True
+            elif module_name == "links":
+                scanner.do_link_extraction = True
+            elif module_name == "graphql":
+                scanner.do_graphql_scan = True
+            elif module_name == "rate-limit":
+                scanner.do_rate_limit = True
+            elif module_name == "takeover":
+                scanner.do_takeover = True
+            elif module_name == "wayback":
+                scanner.do_wayback = True
+            elif module_name == "whois":
+                scanner.do_whois = True
+            elif module_name == "js-secrets":
+                scanner.do_js_secrets = True
+            elif module_name == "params":
+                scanner.do_param_discovery = True
+            elif module_name == "fuzz":
+                scanner.do_content_fuzz = True
+            elif module_name == "pattern":
+                scanner.do_pattern_scan = True
+            elif module_name == "ssti":
+                scanner.do_ssti = True
+            elif module_name == "lfi":
+                scanner.do_lfi = True
+            elif module_name == "race":
+                scanner.do_race = True
+            elif module_name == "xxe":
+                scanner.do_xxe = True
+            elif module_name == "dom":
+                scanner.do_dom = True
+            elif module_name == "cms":
+                scanner.do_cms = True
+
+        return unknown
 
     def print_banner(self) -> None:
         """Print VULNIX banner."""
@@ -706,12 +984,23 @@ class VulnixCLI:
         baseline_file: Optional[str] = None,
         diff_output: Optional[str] = None,
         high_confidence_only: bool = False,
+        debug_events: bool = False,
+        events_output: Optional[str] = None,
+        module_filter: Optional[List[str]] = None,
+        list_modules: bool = False,
+        dry_run: bool = False,
+        max_runtime: Optional[int] = None,
     ) -> ScanResult:
         """Run a vulnerability scan."""
         from urllib.parse import urlparse
         import socket
 
         target = target or ""
+        if list_modules:
+            self.print_banner()
+            self.print_available_modules()
+            return ScanResult(target=target or "N/A", start_time=datetime.now().isoformat())
+
         scan_state = ScanState(resume_state_file or "vulnix_state.json")
         checkpoint = ScanCheckpoint(checkpoint_dir or "checkpoints")
         resumed_state = None
@@ -874,11 +1163,41 @@ class VulnixCLI:
             scanner.do_content_fuzz = True
             scanner.do_pattern_scan = True
 
+        normalized_module_filter = self._normalize_module_filter(module_filter)
+        if normalized_module_filter:
+            unknown_modules = self._apply_module_filter(scanner, vuln_config, normalized_module_filter)
+            if unknown_modules:
+                self.console.print(
+                    "[yellow]Unknown module(s) ignored:[/yellow] "
+                    + ", ".join(unknown_modules)
+                )
+
+        active_modules = self._collect_active_modules(scanner, vuln_config)
+
+        if dry_run:
+            dry_table = Table(show_header=True, header_style="bold cyan")
+            dry_table.add_column("Key", style="cyan", width=18)
+            dry_table.add_column("Value", width=70)
+            dry_table.add_row("Target", target_url)
+            dry_table.add_row("Mode", mode)
+            dry_table.add_row("Safe mode", str(safe_mode))
+            dry_table.add_row("Aggressive mode", str(aggressive_mode))
+            dry_table.add_row("Proxy", proxy_url or "none")
+            dry_table.add_row("Max runtime", str(max_runtime or "none"))
+            dry_table.add_row("Active modules", ", ".join(active_modules) if active_modules else "none")
+            self.console.print(Panel(dry_table, title="Dry Run", border_style="cyan"))
+            return ScanResult(target=target_url, start_time=datetime.now().isoformat())
+
         if proxy_url:
             self.console.print(f"[cyan]Proxy enabled:[/cyan] {proxy_url}")
 
         if verbose:
             self.console.print("[yellow]Verbose mode enabled[/yellow]")
+
+        self.console.print(
+            "[cyan]Active modules:[/cyan] "
+            + (", ".join(active_modules) if active_modules else "none")
+        )
 
         scan_state.start_new_scan(
             target_url,
@@ -892,6 +1211,16 @@ class VulnixCLI:
             },
         )
 
+        events_path = events_output
+        if debug_events and not events_path:
+            events_path = "reports/scan_events.jsonl"
+
+        event_file_handle = None
+        if events_path:
+            event_path_obj = Path(events_path)
+            event_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            event_file_handle = event_path_obj.open("a", encoding="utf-8")
+
         try:
             with Progress(
                 SpinnerColumn(),
@@ -899,10 +1228,21 @@ class VulnixCLI:
                 BarColumn(),
                 TaskProgressColumn(),
                 console=self.console,
+                disable=True,
             ) as progress:
                 task = progress.add_task("[cyan]Initializing scan...", total=100, completed=0)
                 progress_target = {"value": 0}
                 stop_animation = {"value": False}
+                request_stats = {
+                    "total": 0,
+                    "failed": 0,
+                    "latency_sum": 0.0,
+                    "latency_count": 0,
+                }
+                module_state: Dict[str, Dict[str, Any]] = defaultdict(
+                    lambda: {"status": "idle", "events": 0, "findings": 0, "errors": 0}
+                )
+                recent_events = deque(maxlen=10)
                 phase_to_percent = {
                     "Crawling target": 10,
                     "Found ": 15,
@@ -933,6 +1273,112 @@ class VulnixCLI:
                     "Analyzing sitemap": 92,
                     "Extracting links": 95,
                 }
+
+                def _render_runtime_group() -> Group:
+                    module_table = Table(show_header=True, header_style="bold cyan")
+                    module_table.add_column("Module", width=20)
+                    module_table.add_column("Status", width=12)
+                    module_table.add_column("Events", width=8)
+                    module_table.add_column("Findings", width=9)
+                    module_table.add_column("Errors", width=7)
+
+                    for module_name, stats in sorted(module_state.items(), key=lambda item: item[0]):
+                        module_table.add_row(
+                            module_name,
+                            str(stats.get("status", "idle")),
+                            str(stats.get("events", 0)),
+                            str(stats.get("findings", 0)),
+                            str(stats.get("errors", 0)),
+                        )
+
+                    request_table = Table(show_header=True, header_style="bold green")
+                    request_table.add_column("Metric", width=24)
+                    request_table.add_column("Value", width=18)
+                    avg_latency = (
+                        request_stats["latency_sum"] / request_stats["latency_count"]
+                        if request_stats["latency_count"] > 0
+                        else 0.0
+                    )
+                    request_table.add_row("Total Requests", str(request_stats["total"]))
+                    request_table.add_row("Failed Requests", str(request_stats["failed"]))
+                    request_table.add_row("Avg Latency (ms)", f"{avg_latency:.2f}")
+                    request_table.add_row("Active Modules", str(len(active_modules)))
+                    request_table.add_row("Findings (live)", str(sum(v["findings"] for v in module_state.values())))
+                    request_table.add_row("Errors (live)", str(sum(v["errors"] for v in module_state.values())))
+
+                    events_table = Table(show_header=True, header_style="bold magenta")
+                    events_table.add_column("Time", width=8)
+                    events_table.add_column("Type", width=18)
+                    events_table.add_column("Module", width=18)
+                    events_table.add_column("Info", width=45)
+                    for ev in list(recent_events)[-8:]:
+                        events_table.add_row(
+                            ev.get("time", ""),
+                            ev.get("type", ""),
+                            ev.get("module", ""),
+                            ev.get("info", ""),
+                        )
+
+                    return Group(
+                        progress.get_renderable(),
+                        Panel(module_table, title="Module Runtime", border_style="cyan"),
+                        Panel(request_table, title="Request Metrics", border_style="green"),
+                        Panel(events_table, title="Recent Events", border_style="magenta"),
+                    )
+
+                live: Optional[Live] = None
+
+                def _refresh_live() -> None:
+                    if live is not None:
+                        live.update(_render_runtime_group())
+
+                def _handle_event(event: Dict[str, Any]) -> None:
+                    event_type = str(event.get("type", "unknown"))
+                    module_name = str(event.get("module", "system"))
+                    module_stats = module_state[module_name]
+                    module_stats["events"] += 1
+
+                    if event_type == "module_started":
+                        module_stats["status"] = "running"
+                    elif event_type == "module_completed":
+                        module_stats["status"] = "done"
+                    elif event_type == "module_error":
+                        module_stats["status"] = "error"
+                        module_stats["errors"] += 1
+                    elif event_type == "finding_detected":
+                        module_stats["findings"] += 1
+                    elif event_type == "request_completed":
+                        request_stats["total"] += 1
+                        latency = float(event.get("latency_ms") or 0.0)
+                        if latency > 0:
+                            request_stats["latency_sum"] += latency
+                            request_stats["latency_count"] += 1
+                    elif event_type == "request_failed":
+                        request_stats["total"] += 1
+                        request_stats["failed"] += 1
+
+                    timestamp = str(event.get("timestamp", datetime.now().isoformat()))
+                    info_text = (
+                        str(event.get("error"))
+                        or str(event.get("message"))
+                        or str(event.get("finding_type"))
+                        or str(event.get("status_code"))
+                        or ""
+                    )
+                    recent_events.append(
+                        {
+                            "time": timestamp[11:19] if len(timestamp) >= 19 else timestamp[:8],
+                            "type": event_type,
+                            "module": module_name,
+                            "info": info_text[:45],
+                        }
+                    )
+
+                    if event_file_handle is not None:
+                        event_file_handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+                        event_file_handle.flush()
+
+                    _refresh_live()
 
                 async def animate_progress() -> None:
                     """Smoothly animate progress toward current phase target."""
@@ -985,18 +1431,64 @@ class VulnixCLI:
                                 },
                             )
                             break
+                    _refresh_live()
 
                 animation_task = asyncio.create_task(animate_progress())
-                try:
-                    result = await scanner.full_scan(target, progress_callback=update_progress)
-                    progress_target["value"] = 100
-                    while progress.tasks[task].completed < 100:
-                        await asyncio.sleep(0.02)
-                    progress.update(task, completed=100)
-                finally:
-                    stop_animation["value"] = True
-                    await animation_task
+                with Live(_render_runtime_group(), refresh_per_second=6, console=self.console) as live_instance:
+                    live = live_instance
+                    try:
+                        try:
+                            scan_coro = scanner.full_scan(
+                                target,
+                                progress_callback=update_progress,
+                                event_callback=_handle_event,
+                            )
+                        except TypeError:
+                            # Backward compatibility for mocked/legacy ScanEngine signatures.
+                            scan_coro = scanner.full_scan(
+                                target,
+                                progress_callback=update_progress,
+                            )
+                        if max_runtime and max_runtime > 0:
+                            try:
+                                result = await asyncio.wait_for(scan_coro, timeout=max_runtime)
+                            except asyncio.TimeoutError:
+                                result = scanner.scan_result or ScanResult(
+                                    target=target_url,
+                                    start_time=datetime.now().isoformat(),
+                                )
+                                result.end_time = datetime.now().isoformat()
+                                result.errors.append(
+                                    {
+                                        "module": "scanner",
+                                        "phase": "max_runtime",
+                                        "url": target_url,
+                                        "error": f"Scan exceeded max runtime of {max_runtime}s",
+                                        "timestamp": datetime.now().isoformat(),
+                                    }
+                                )
+                                _handle_event(
+                                    {
+                                        "type": "module_error",
+                                        "module": "scanner",
+                                        "error": f"max runtime exceeded ({max_runtime}s)",
+                                        "timestamp": datetime.now().isoformat(),
+                                    }
+                                )
+                        else:
+                            result = await scan_coro
+
+                        progress_target["value"] = 100
+                        while progress.tasks[task].completed < 100:
+                            await asyncio.sleep(0.02)
+                        progress.update(task, completed=100)
+                        _refresh_live()
+                    finally:
+                        stop_animation["value"] = True
+                        await animation_task
         finally:
+            if event_file_handle is not None:
+                event_file_handle.close()
             await scanner.close()
 
         if pre_scan_errors:
@@ -1070,6 +1562,9 @@ class VulnixCLI:
         if jsonl_output:
             self._write_jsonl(report_result, jsonl_output)
             self.console.print(f"[green]JSONL report saved to {jsonl_output}[/green]")
+
+        if events_path:
+            self.console.print(f"[green]Event timeline saved to {events_path}[/green]")
 
         diff_payload = self._compute_diff(report_result, baseline_keys)
         if baseline_keys:

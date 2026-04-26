@@ -83,8 +83,13 @@
 - Filtro de confiança alta (`--high-confidence-only`) para reduzir ruído em terminal e relatórios
 - Retomada com `--resume` + checkpoints em `--checkpoint-dir`
 - Exportação adicional em JSONL (`--jsonl-output`)
+- Timeline de eventos em tempo real com dashboard de módulos/requests (`--debug-events`)
+- Exportação da timeline em JSONL (`--events-output`)
 - Diff com baseline (`--baseline` + `--diff-output`)
 - Envio opcional para SIEM (`--siem splunk|elk`)
+- Listagem e execução seletiva de módulos (`--list-modules`, `--module`)
+- Pré-visualização sem executar requests (`--dry-run`)
+- Timeout global de execução (`--max-runtime`)
 
 ## Instalação
 
@@ -149,6 +154,32 @@ python run.py https://example.com --mode deep -v -o reports/deep_scan
 
 ```bash
 python run.py https://example.com --recon-all
+```
+
+### Planejamento e Módulos
+
+```bash
+# listar módulos disponíveis
+python run.py --list-modules
+
+# executar somente módulos específicos
+python run.py https://example.com --module sqli --module xss,headers
+
+# mostrar plano sem executar requests
+python run.py https://example.com --module dns,ssl --dry-run
+```
+
+### Observabilidade em Tempo Real
+
+```bash
+# habilita dashboard + timeline em reports/scan_events.jsonl
+python run.py https://example.com --debug-events
+
+# escolhe arquivo de timeline
+python run.py https://example.com --debug-events --events-output reports/live_events.jsonl
+
+# limita execução total (segundos)
+python run.py https://example.com --max-runtime 600
 ```
 
 ### Ferramentas Individuais
@@ -287,6 +318,12 @@ python run.py --update-cve-cache
 | `--checkpoint-dir` | Pasta para checkpoints |
 | `--high-confidence-only` | Exibe e salva apenas findings com alta confiança |
 | `--jsonl-output` | Salva findings em JSONL |
+| `--debug-events` | Habilita dashboard/eventos em tempo real e timeline JSONL padrão |
+| `--events-output` | Define arquivo JSONL da timeline de eventos |
+| `--list-modules` | Lista módulos disponíveis para execução seletiva |
+| `--module` | Executa apenas módulos selecionados (repetível ou CSV) |
+| `--dry-run` | Mostra o plano de execução sem executar requests |
+| `--max-runtime` | Timeout global do scan em segundos |
 | `--baseline` | JSON base para diff |
 | `--diff-output` | Salva diff em JSON |
 | `--siem` | Envia eventos para `splunk` ou `elk` |
