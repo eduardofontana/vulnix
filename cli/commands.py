@@ -200,6 +200,25 @@ class VulnixCLI:
 
         self.console.print(Panel(table, title="DNS Records"))
 
+    def print_subdomain_results(self, findings: List) -> None:
+        """Print discovered subdomains."""
+        subdomain_findings = [f for f in findings if f.type == "subdomain"]
+        if not subdomain_findings:
+            return
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Subdomain", style="cyan", width=64)
+
+        seen = set()
+        for f in subdomain_findings:
+            label = f.url.replace("http://", "").replace("https://", "").strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            table.add_row(label)
+
+        self.console.print(Panel(table, title="Subdomains"))
+
     def print_port_results(self, findings: List) -> None:
         """Print port scan results."""
         port_findings = [f for f in findings if f.type == "port"]
@@ -558,6 +577,40 @@ class VulnixCLI:
             )
         Path(jsonl_file).write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
 
+    @staticmethod
+    def _is_high_confidence_finding(finding: Any) -> bool:
+        """Return whether a finding passes strict high-confidence criteria."""
+        details = getattr(finding, "details", {}) or {}
+        severity = str(getattr(finding, "severity", "")).lower()
+        finding_type = str(getattr(finding, "type", "")).lower()
+
+        direct_conf = str(getattr(finding, "confidence", "")).lower()
+        detail_conf = str(details.get("confidence", "")).lower()
+        confirmations = details.get("confirmations")
+
+        if direct_conf in {"high", "firm"} or detail_conf in {"high", "firm"}:
+            return True
+        if isinstance(confirmations, int) and confirmations >= 2:
+            return True
+        if finding_type == "http_smuggling" and severity in {"high", "critical"}:
+            return True
+        if finding_type == "cve_intel" and detail_conf == "firm":
+            return True
+        return False
+
+    def _to_high_confidence_result(self, result: ScanResult) -> ScanResult:
+        """Build a cloned result containing only high-confidence findings."""
+        filtered = [f for f in result.findings if self._is_high_confidence_finding(f)]
+        return ScanResult(
+            target=result.target,
+            start_time=result.start_time,
+            end_time=result.end_time,
+            findings=filtered,
+            crawled_urls=result.crawled_urls,
+            scanned_endpoints=result.scanned_endpoints,
+            errors=list(result.errors),
+        )
+
     async def _emit_siem(self, result: ScanResult, siem_target: str) -> None:
         """Emit findings to SIEM-compatible endpoint."""
         if siem_target not in {"splunk", "elk"}:
@@ -652,6 +705,7 @@ class VulnixCLI:
         siem_target: Optional[str] = None,
         baseline_file: Optional[str] = None,
         diff_output: Optional[str] = None,
+        high_confidence_only: bool = False,
     ) -> ScanResult:
         """Run a vulnerability scan."""
         from urllib.parse import urlparse
@@ -948,6 +1002,14 @@ class VulnixCLI:
         if pre_scan_errors:
             result.errors.extend(pre_scan_errors)
 
+        report_result = result
+        if high_confidence_only:
+            report_result = self._to_high_confidence_result(result)
+            self.console.print(
+                "[cyan]High-confidence filter enabled:[/cyan] "
+                f"{len(report_result.findings)} of {len(result.findings)} finding(s) kept."
+            )
+
         scan_state.state["findings"] = [
             {
                 "id": f.id,
@@ -965,50 +1027,51 @@ class VulnixCLI:
         scan_state.complete_scan()
 
         self.console.print()
-        self.print_scan_summary(result)
-        self.print_error_summary(result.errors)
+        self.print_scan_summary(report_result)
+        self.print_error_summary(report_result.errors)
 
-        self.print_dns_results(result.findings)
-        self.print_port_results(result.findings)
-        self.print_ssl_results(result.findings)
-        self.print_robots_results(result.findings)
-        self.print_sitemap_results(result.findings)
-        self.print_link_extraction_results(result.findings)
-        self.print_graphql_results(result.findings)
-        self.print_rate_limit_results(result.findings)
-        self.print_takeover_results(result.findings)
-        self.print_wayback_results(result.findings)
-        self.print_whois_results(result.findings)
-        self.print_js_secrets_results(result.findings)
-        self.print_param_results(result.findings)
-        self.print_pattern_results(result.findings)
-        self.print_fuzz_results(result.findings)
+        self.print_subdomain_results(report_result.findings)
+        self.print_dns_results(report_result.findings)
+        self.print_port_results(report_result.findings)
+        self.print_ssl_results(report_result.findings)
+        self.print_robots_results(report_result.findings)
+        self.print_sitemap_results(report_result.findings)
+        self.print_link_extraction_results(report_result.findings)
+        self.print_graphql_results(report_result.findings)
+        self.print_rate_limit_results(report_result.findings)
+        self.print_takeover_results(report_result.findings)
+        self.print_wayback_results(report_result.findings)
+        self.print_whois_results(report_result.findings)
+        self.print_js_secrets_results(report_result.findings)
+        self.print_param_results(report_result.findings)
+        self.print_pattern_results(report_result.findings)
+        self.print_fuzz_results(report_result.findings)
 
-        if result.findings:
+        if report_result.findings:
             self.console.print()
             self.console.print(Panel("[bold magenta]Vulnerability Findings[/bold magenta]", border_style="magenta"))
-            self.print_findings_table(result.findings)
+            self.print_findings_table(report_result.findings)
 
         if output_format in ["json", "both"]:
-            self.report_generator.generate_json_report(result)
+            self.report_generator.generate_json_report(report_result)
             if output_file:
-                self.report_generator.generate_json_report(result, f"{output_file}.json")
+                self.report_generator.generate_json_report(report_result, f"{output_file}.json")
 
         if output_format in ["html", "both"]:
             if output_file:
-                self.report_generator.generate_html_report(result, f"{output_file}.html")
+                self.report_generator.generate_html_report(report_result, f"{output_file}.html")
                 self.console.print(f"[green]HTML report saved to {output_file}.html[/green]")
 
         if output_format in ["text", "both"]:
-            self.report_generator.generate_text_report(result)
+            self.report_generator.generate_text_report(report_result)
             if output_file:
-                self.report_generator.generate_text_report(result, f"{output_file}.txt")
+                self.report_generator.generate_text_report(report_result, f"{output_file}.txt")
 
         if jsonl_output:
-            self._write_jsonl(result, jsonl_output)
+            self._write_jsonl(report_result, jsonl_output)
             self.console.print(f"[green]JSONL report saved to {jsonl_output}[/green]")
 
-        diff_payload = self._compute_diff(result, baseline_keys)
+        diff_payload = self._compute_diff(report_result, baseline_keys)
         if baseline_keys:
             self.console.print(
                 f"[cyan]Baseline diff:[/cyan] {diff_payload['new_count']} new finding(s) "
@@ -1022,7 +1085,7 @@ class VulnixCLI:
                 self.console.print(f"[green]Diff report saved to {diff_output}[/green]")
 
         if siem_target:
-            await self._emit_siem(result, siem_target.lower())
+            await self._emit_siem(report_result, siem_target.lower())
             self.console.print(f"[green]SIEM export completed ({siem_target}).[/green]")
 
-        return result
+        return report_result

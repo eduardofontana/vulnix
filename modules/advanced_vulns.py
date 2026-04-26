@@ -6,6 +6,7 @@ SSTI, LFI/RFI, Race Conditions, XXE, DOM/postMessage
 import re
 import asyncio
 import time
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse, urljoin, parse_qs, urlencode
 
@@ -99,34 +100,51 @@ class SSTIDetector:
         self.request_engine = request_engine
         self.error_collector = ModuleErrorCollector("ssti")
 
+    @staticmethod
+    def _similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, a or "", b or "").ratio()
+
     async def test_parameter(self, url: str, param: str, template: str) -> Dict[str, Any]:
         """Test a parameter for SSTI."""
+        baseline_resp = await self.request_engine.post(url, data={param: "vulnix_baseline"})
+        baseline_text = baseline_resp.text if baseline_resp else ""
+
         for engine, payloads in SSTI_PAYLOADS.items():
             for payload in payloads:
+                confirmations = 0
                 try:
-                    data = {param: payload}
-                    response = await self.request_engine.post(url, data=data)
+                    for _ in range(2):
+                        data = {param: payload}
+                        response = await self.request_engine.post(url, data=data)
+                        if not response or response.status_code != 200:
+                            continue
 
-                    if response and response.status_code == 200:
                         text = response.text
+                        similarity = self._similarity(baseline_text, text)
+                        indicator_hit = False
+                        evidence = ""
 
-                        if "{7*7}" in payload:
-                            if "49" in text:
-                                return {
-                                    "vulnerable": True,
-                                    "template": engine,
-                                    "payload": payload,
-                                    "evidence": "Math operation executed",
-                                }
+                        if "{{7*7}}" in payload or "${7*7}" in payload or "<%= 7*7 %>" in payload:
+                            if re.search(r"\b49\b", text):
+                                indicator_hit = True
+                                evidence = "Math operation marker returned (49)"
 
-                        if any(marker in text for marker in self.BLIND_MARKERS):
-                            if payload[:10] in text:
-                                return {
-                                    "vulnerable": True,
-                                    "template": engine,
-                                    "payload": payload,
-                                    "evidence": "Payload reflected",
-                                }
+                        if any(marker in text for marker in self.BLIND_MARKERS) and payload[:8] in text:
+                            indicator_hit = True
+                            evidence = "Payload marker reflected in response"
+
+                        if indicator_hit and similarity < 0.995:
+                            confirmations += 1
+
+                    if confirmations >= 2:
+                        return {
+                            "vulnerable": True,
+                            "template": engine,
+                            "payload": payload,
+                            "evidence": evidence,
+                            "confidence": "high",
+                            "confirmations": confirmations,
+                        }
 
                 except Exception as e:
                     self.error_collector.add(url, e, f"test_{engine}")
@@ -176,24 +194,41 @@ class LFIDetector:
         self.request_engine = request_engine
         self.error_collector = ModuleErrorCollector("lfi")
 
+    @staticmethod
+    def _similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, a or "", b or "").ratio()
+
     async def test_lfi(self, url: str, param: str) -> Dict[str, Any]:
         """Test for LFI vulnerabilities."""
+        baseline = await self.request_engine.get(url, params={param: "vulnix_baseline"})
+        baseline_text = baseline.text if baseline else ""
+
         for payload in LFI_PATTERNS[:10]:
+            confirmations = 0
+            last_evidence = ""
             try:
-                data = {param: payload}
-                response = await self.request_engine.get(url, params=data)
+                for _ in range(2):
+                    data = {param: payload}
+                    response = await self.request_engine.get(url, params=data)
 
-                if response and response.status_code == 200:
-                    text = response.text
+                    if response and response.status_code == 200:
+                        text = response.text
+                        similarity = self._similarity(baseline_text, text)
+                        for indicator in self.LFI_INDICATORS:
+                            if indicator.lower() in text.lower() and indicator.lower() not in baseline_text.lower() and similarity < 0.995:
+                                confirmations += 1
+                                last_evidence = f"Found: {indicator}"
+                                break
 
-                    for indicator in self.LFI_INDICATORS:
-                        if indicator.lower() in text.lower():
-                            return {
-                                "vulnerable": True,
-                                "type": "lfi",
-                                "payload": payload,
-                                "evidence": f"Found: {indicator}",
-                            }
+                if confirmations >= 2:
+                    return {
+                        "vulnerable": True,
+                        "type": "lfi",
+                        "payload": payload,
+                        "evidence": last_evidence,
+                        "confidence": "high",
+                        "confirmations": confirmations,
+                    }
 
             except Exception as e:
                 self.error_collector.add(url, e, "test_lfi")
@@ -202,21 +237,31 @@ class LFIDetector:
 
     async def test_rfi(self, url: str, param: str) -> Dict[str, Any]:
         """Test for RFI vulnerabilities."""
-        for payload in RFI_PATTERNS:
-            try:
-                data = {param: payload}
-                response = await self.request_engine.get(url, params=data)
+        baseline = await self.request_engine.get(url, params={param: "vulnix_baseline"})
+        baseline_text = baseline.text.lower() if baseline else ""
 
-                if response:
-                    text = response.text.lower()
-                    for indicator in self.RFI_INDICATORS:
-                        if indicator in text:
-                            return {
-                                "vulnerable": True,
-                                "type": "rfi",
-                                "payload": payload,
-                                "evidence": f"Fetched from: {payload}",
-                            }
+        for payload in RFI_PATTERNS:
+            confirmations = 0
+            try:
+                for _ in range(2):
+                    data = {param: payload}
+                    response = await self.request_engine.get(url, params=data)
+
+                    if response and response.status_code == 200:
+                        text = response.text.lower()
+                        similarity = self._similarity(baseline_text, text)
+                        if any(indicator in text and indicator not in baseline_text for indicator in self.RFI_INDICATORS) and similarity < 0.995:
+                            confirmations += 1
+
+                if confirmations >= 2:
+                    return {
+                        "vulnerable": True,
+                        "type": "rfi",
+                        "payload": payload,
+                        "evidence": f"Fetched from: {payload}",
+                        "confidence": "high",
+                        "confirmations": confirmations,
+                    }
 
             except Exception as e:
                 self.error_collector.add(url, e, "test_rfi")
@@ -384,29 +429,47 @@ class XXEDetector:
         self.request_engine = request_engine
         self.error_collector = ModuleErrorCollector("xxe")
 
+    @staticmethod
+    def _similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, a or "", b or "").ratio()
+
     async def test_xxe(self, url: str) -> Dict[str, Any]:
         """Test for XXE vulnerabilities."""
         headers = {"Content-Type": "application/xml"}
+        baseline_payload = '<?xml version="1.0"?><root>vulnix_baseline</root>'
+        baseline_resp = await self.request_engine.post(url, data=baseline_payload, headers=headers)
+        baseline_text = baseline_resp.text if baseline_resp else ""
 
         for payload in XXE_PAYLOADS[:3]:
+            confirmations = 0
+            last_evidence = ""
             try:
-                response = await self.request_engine.post(
-                    url,
-                    data=payload,
-                    headers=headers,
-                )
+                for _ in range(2):
+                    response = await self.request_engine.post(
+                        url,
+                        data=payload,
+                        headers=headers,
+                    )
 
-                if response and response.status_code == 200:
-                    text = response.text
+                    if response and response.status_code == 200:
+                        text = response.text
+                        similarity = self._similarity(baseline_text, text)
 
-                    for indicator in self.INDICATORS:
-                        if indicator in text:
-                            return {
-                                "vulnerable": True,
-                                "type": "xxe",
-                                "payload": payload[:50],
-                                "evidence": f"Found: {indicator}",
-                            }
+                        for indicator in self.INDICATORS:
+                            if indicator in text and indicator not in baseline_text and similarity < 0.995:
+                                confirmations += 1
+                                last_evidence = f"Found: {indicator}"
+                                break
+
+                if confirmations >= 2:
+                    return {
+                        "vulnerable": True,
+                        "type": "xxe",
+                        "payload": payload[:50],
+                        "evidence": last_evidence,
+                        "confidence": "high",
+                        "confirmations": confirmations,
+                    }
 
             except Exception as e:
                 self.error_collector.add(url, e, "test_xxe")

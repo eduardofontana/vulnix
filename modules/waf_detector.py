@@ -4,6 +4,7 @@ Identify Web Application Firewalls and their characteristics
 """
 
 import re
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Any, Tuple
 from core.request_engine import RequestEngine
 from core.error_collector import ModuleErrorCollector
@@ -255,6 +256,22 @@ class WAFDetector:
         self.bypass_results: List[Dict[str, Any]] = []
         self.error_collector = ModuleErrorCollector("waf_detector")
 
+    @staticmethod
+    def _similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, a or "", b or "").ratio()
+
+    def _is_blocked_response(self, response) -> bool:
+        if not response:
+            return False
+        if response.status_code in {401, 403, 406, 429, 503}:
+            return True
+        body = (response.text or "").lower()
+        return any(
+            re.search(pattern, body, re.IGNORECASE)
+            for signature in self.WAF_SIGNATURES.values()
+            for pattern in signature.get("body_patterns", [])
+        )
+
     async def detect(self, url: str) -> Optional[Dict[str, Any]]:
         """Detect WAF at the target URL."""
         self.waf_info = None
@@ -373,6 +390,8 @@ class WAFDetector:
             await self.detect(url)
 
         payloads = self.BYPASS_PAYLOADS.get(attack_type, self.BYPASS_PAYLOADS["sql_injection"])
+        benign_response = await self.engine.get(url, params={"q": "vulnix_baseline"})
+        benign_text = benign_response.text if benign_response else ""
 
         bypass_techniques = {
             "case_variation": lambda p: p.swapcase(),
@@ -384,25 +403,44 @@ class WAFDetector:
         }
 
         for payload in payloads:
+            original_response = await self.engine.get(
+                url,
+                params={"q": payload},
+                headers={"User-Agent": self.engine._get_random_user_agent()},
+            )
+            if not self._is_blocked_response(original_response):
+                continue
+            blocked_text = original_response.text if original_response else ""
+
             for technique, transform in bypass_techniques.items():
                 modified_payload = transform(payload)
+                confirmations = 0
 
                 try:
-                    response = await self.engine.get(
-                        url,
-                        params={"q": modified_payload},
-                        headers={"User-Agent": self.engine._get_random_user_agent()},
-                    )
+                    for _ in range(2):
+                        response = await self.engine.get(
+                            url,
+                            params={"q": modified_payload},
+                            headers={"User-Agent": self.engine._get_random_user_agent()},
+                        )
 
-                    if response and response.status_code == 200:
+                        if response and not self._is_blocked_response(response):
+                            similarity_to_blocked = self._similarity(blocked_text, response.text or "")
+                            similarity_to_benign = self._similarity(benign_text, response.text or "")
+                            if similarity_to_blocked < 0.98 and similarity_to_benign > 0.4:
+                                confirmations += 1
+
+                    if confirmations >= 2:
                         self.bypass_results.append({
                             "technique": technique,
                             "original_payload": payload,
                             "bypassed_payload": modified_payload,
-                            "status": "potentially_bypassed",
+                            "status": "confirmed_bypass",
                             "severity": "high",
                             "url": url,
                             "waf": self.waf_info.get("waf") if self.waf_info else "Unknown",
+                            "confidence": "high",
+                            "confirmations": confirmations,
                         })
 
                 except Exception as e:

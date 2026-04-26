@@ -111,31 +111,34 @@ class WebSocketTester:
         }
 
         try:
-            reader, writer = await asyncio.wait_for(
-                self._create_websocket(url, protocol, headers),
-                timeout=5
-            )
+            confirmations = 0
+            for _ in range(2):
+                reader, writer = await asyncio.wait_for(
+                    self._create_websocket(url, protocol, headers),
+                    timeout=5
+                )
+                await self._send_ws_frame(writer, "ping")
+                try:
+                    response = await asyncio.wait_for(reader.read(1024), timeout=3)
+                    if response:
+                        confirmations += 1
+                except asyncio.TimeoutError:
+                    pass
+                writer.close()
+                await writer.wait_closed()
 
-            writer.write(b"GET / HTTP/1.1\r\n\r\n")
-            await writer.drain()
-
-            try:
-                response = await asyncio.wait_for(reader.read(1024), timeout=5)
-                if response:
-                    findings.append({
-                        "type": "websocket",
-                        "subtype": "origin_bypass",
-                        "severity": "medium",
-                        "url": url,
-                        "description": "WebSocket endpoint accepts connections from arbitrary origins",
-                        "remediation": "Implement proper Origin validation",
-                        "cvss": {"score": 5.3, "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"},
-                    })
-            except asyncio.TimeoutError:
-                pass
-
-            writer.close()
-            await writer.wait_closed()
+            if confirmations >= 2:
+                findings.append({
+                    "type": "websocket",
+                    "subtype": "origin_bypass",
+                    "severity": "medium",
+                    "url": url,
+                    "description": "WebSocket endpoint accepts connections from arbitrary origins",
+                    "remediation": "Implement proper Origin validation",
+                    "confidence": "high",
+                    "confirmations": confirmations,
+                    "cvss": {"score": 5.3, "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"},
+                })
 
         except Exception as e:
             self.error_collector.add(url, e, "test_origin_bypass")
@@ -244,30 +247,35 @@ class WebSocketTester:
         import time
 
         try:
-            connections = []
-            start_time = time.time()
+            target_connections = 80
+            rounds_confirmed = 0
+            for _ in range(2):
+                connections = []
+                start_time = time.time()
 
-            for _ in range(50):
-                try:
-                    reader, writer = await asyncio.wait_for(
-                        self._create_websocket(url, protocol),
-                        timeout=1
-                    )
-                    connections.append((reader, writer))
-                except Exception as e:
-                    self.error_collector.add(url, e, "test_dos_potential_connect")
-                    break
+                for _ in range(target_connections):
+                    try:
+                        reader, writer = await asyncio.wait_for(
+                            self._create_websocket(url, protocol),
+                            timeout=1
+                        )
+                        connections.append((reader, writer))
+                    except Exception:
+                        break
 
-            elapsed = time.time() - start_time
+                elapsed = time.time() - start_time
 
-            for reader, writer in connections:
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception as e:
-                    self.error_collector.add(url, e, "test_dos_potential_close")
+                for reader, writer in connections:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception as e:
+                        self.error_collector.add(url, e, "test_dos_potential_close")
 
-            if len(connections) >= 50 and elapsed < 2:
+                if len(connections) >= int(target_connections * 0.95) and elapsed < 2:
+                    rounds_confirmed += 1
+
+            if rounds_confirmed >= 2:
                 findings.append({
                     "type": "websocket",
                     "subtype": "dos_vulnerability",
@@ -275,6 +283,8 @@ class WebSocketTester:
                     "url": url,
                     "description": "Server accepts excessive concurrent WebSocket connections",
                     "remediation": "Implement connection limits and rate limiting",
+                    "confidence": "high",
+                    "confirmations": rounds_confirmed,
                     "cvss": {"score": 5.3, "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"},
                 })
 
@@ -318,6 +328,12 @@ class WebSocketTester:
 
         writer.write(request.encode())
         await writer.drain()
+        handshake = await asyncio.wait_for(reader.read(2048), timeout=3)
+        handshake_text = handshake.decode("utf-8", errors="ignore").lower()
+        if "101 switching protocols" not in handshake_text or "sec-websocket-accept" not in handshake_text:
+            writer.close()
+            await writer.wait_closed()
+            raise ValueError("WebSocket handshake failed")
 
         return reader, writer
 

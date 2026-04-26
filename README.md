@@ -80,6 +80,7 @@
 ### Operação Avançada
 - Modo `--safe` (reduz pressão de requests e desativa checks mais agressivos)
 - Modo `--aggressive` (aumenta pressão e ativa checks ativos)
+- Filtro de confiança alta (`--high-confidence-only`) para reduzir ruído em terminal e relatórios
 - Retomada com `--resume` + checkpoints em `--checkpoint-dir`
 - Exportação adicional em JSONL (`--jsonl-output`)
 - Diff com baseline (`--baseline` + `--diff-output`)
@@ -211,6 +212,7 @@ python run.py --update-cve-cache
 | `-o, --output` | Prefixo do arquivo de saída |
 | `--resume` | Arquivo de estado para retomar scan |
 | `--checkpoint-dir` | Pasta para checkpoints |
+| `--high-confidence-only` | Exibe e salva apenas findings com alta confiança |
 | `--jsonl-output` | Salva findings em JSONL |
 | `--baseline` | JSON base para diff |
 | `--diff-output` | Salva diff em JSON |

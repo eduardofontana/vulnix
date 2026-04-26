@@ -428,6 +428,12 @@ Examples:
         help="Write baseline diff report to file (JSON)",
     )
 
+    parser.add_argument(
+        "--high-confidence-only",
+        action="store_true",
+        help="Keep only high-confidence findings in terminal output and reports",
+    )
+
     args = parser.parse_args()
 
     cli = VulnixCLI()
@@ -597,6 +603,7 @@ Examples:
                 siem_target=args.siem,
                 baseline_file=args.baseline,
                 diff_output=args.diff_output,
+                high_confidence_only=args.high_confidence_only,
             )
         )
 
