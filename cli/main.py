@@ -208,6 +208,176 @@ Examples:
         help="Full bug bounty reconnaissance",
     )
 
+    parser.add_argument(
+        "--recon-all",
+        action="store_true",
+        help="Run all recon tools (DNS, Ports, SSL, GraphQL, Takeover, Wayback, etc)",
+    )
+
+    parser.add_argument(
+        "--dns",
+        action="store_true",
+        help="Enable DNS lookup (A, AAAA, MX, NS, TXT, CNAME)",
+    )
+
+    parser.add_argument(
+        "--dns-records",
+        type=str,
+        help="DNS record types to query (comma-separated: A,MX,NS,TXT,CNAME)",
+    )
+
+    parser.add_argument(
+        "--port-scan",
+        action="store_true",
+        help="Enable port scanning",
+    )
+
+    parser.add_argument(
+        "--port-range",
+        type=str,
+        help="Port range to scan (e.g., 1-1000)",
+    )
+
+    parser.add_argument(
+        "--top-ports",
+        type=int,
+        default=20,
+        help="Number of top ports to scan (default: 20)",
+    )
+
+    parser.add_argument(
+        "--ssl",
+        action="store_true",
+        help="Enable SSL/TLS certificate analysis",
+    )
+
+    parser.add_argument(
+        "--tls-check",
+        action="store_true",
+        help="Check TLS vulnerabilities (Heartbleed, POODLE, etc.)",
+    )
+
+    parser.add_argument(
+        "--robots",
+        action="store_true",
+        help="Analyze robots.txt",
+    )
+
+    parser.add_argument(
+        "--sitemap",
+        action="store_true",
+        help="Analyze sitemap.xml",
+    )
+
+    parser.add_argument(
+        "--links",
+        action="store_true",
+        help="Extract all links from pages",
+    )
+
+    parser.add_argument(
+        "--graphql",
+        action="store_true",
+        help="Scan for GraphQL endpoints and vulnerabilities",
+    )
+
+    parser.add_argument(
+        "--rate-limit",
+        action="store_true",
+        help="Detect rate limiting and throttling",
+    )
+
+    parser.add_argument(
+        "--proxy",
+        type=str,
+        default=None,
+        help="Use proxy for requests (http://host:port)",
+    )
+
+    parser.add_argument(
+        "--takeover",
+        action="store_true",
+        help="Check subdomain takeover vulnerabilities",
+    )
+
+    parser.add_argument(
+        "--wayback",
+        action="store_true",
+        help="Analyze Wayback Machine snapshots",
+    )
+
+    parser.add_argument(
+        "--whois",
+        action="store_true",
+        help="WHOIS lookup for domain",
+    )
+
+    parser.add_argument(
+        "--js-secrets",
+        action="store_true",
+        help="Extract secrets from JavaScript files",
+    )
+
+    parser.add_argument(
+        "--params",
+        action="store_true",
+        help="Discover hidden parameters",
+    )
+
+    parser.add_argument(
+        "--fuzz",
+        action="store_true",
+        help="Directory and file fuzzing",
+    )
+
+    parser.add_argument(
+        "--pattern",
+        action="store_true",
+        help="Scan for sensitive patterns",
+    )
+
+    parser.add_argument(
+        "--ssti",
+        action="store_true",
+        help="Test for Server-Side Template Injection",
+    )
+
+    parser.add_argument(
+        "--lfi",
+        action="store_true",
+        help="Test for Local File Inclusion",
+    )
+
+    parser.add_argument(
+        "--race",
+        action="store_true",
+        help="Test for race conditions",
+    )
+
+    parser.add_argument(
+        "--xxe",
+        action="store_true",
+        help="Test for XML External Entity injection",
+    )
+
+    parser.add_argument(
+        "--dom",
+        action="store_true",
+        help="Scan for DOM vulnerabilities",
+    )
+
+    parser.add_argument(
+        "--cms",
+        action="store_true",
+        help="Detect CMS (WordPress, Joomla, Drupal, etc)",
+    )
+
+    parser.add_argument(
+        "--extract-links",
+        action="store_true",
+        help="Extract links from crawled pages",
+    )
+
     args = parser.parse_args()
 
     cli = VulnixCLI()
@@ -338,6 +508,33 @@ Examples:
                 tech_fingerprint=args.tech,
                 recon=args.recon,
                 scan_mode=args.mode,
+                dns_lookup=args.dns,
+                dns_records=args.dns_records,
+                port_scan=args.port_scan,
+                port_range=args.port_range,
+                top_ports=args.top_ports,
+                ssl_analysis=args.ssl,
+                tls_check=args.tls_check,
+                robots_analysis=args.robots,
+                sitemap_analysis=args.sitemap,
+                link_extraction=args.links or args.extract_links,
+                graphql_scan=args.graphql,
+                rate_limit_detect=args.rate_limit,
+                proxy_url=args.proxy,
+                takeover_check=args.takeover,
+                wayback_analysis=args.wayback,
+                whois_lookup=args.whois,
+                js_secrets=args.js_secrets,
+                param_discovery=args.params,
+                content_fuzz=args.fuzz,
+                pattern_scan=args.pattern,
+                recon_all=args.recon_all,
+                ssti_scan=args.ssti,
+                lfi_scan=args.lfi,
+                race_scan=args.race,
+                xxe_scan=args.xxe,
+                dom_scan=args.dom,
+                cms_detect=args.cms,
             )
         )
 

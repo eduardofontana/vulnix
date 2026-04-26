@@ -5,9 +5,12 @@ Fast passive subdomain enumeration from multiple sources
 
 import asyncio
 import re
+import socket
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
 import httpx
+import dns.resolver
+import dns.reversename
 
 from core.request_engine import RequestEngine
 from core.error_collector import ModuleErrorCollector
@@ -221,34 +224,145 @@ class PortScanner:
         1723, 3306, 3389, 5432, 5900, 8080, 8443, 8888, 9200, 27017,
     ]
 
-    def __init__(self, request_engine: RequestEngine):
+    TOP_PORTS_100 = [
+        21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
+        1433, 1521, 1723, 1755, 3306, 3389, 5432, 5500, 5900, 5985, 6379,
+        8000, 8001, 8009, 8080, 8081, 8443, 8888, 9090, 9200, 9300, 27017,
+        27018, 27019, 28017, 3307, 5000, 5001, 5002, 5003, 5004, 5005, 5006,
+        5007, 5008, 5009, 5010, 5011, 5012, 5013, 5014, 5015, 5016, 5017,
+        5018, 5019, 5020, 5021, 5022, 5023, 5024, 5025, 5026, 5027, 5028,
+        5029, 5030, 5031, 5032, 5033, 5034, 5035, 5036, 5037, 5038, 5039,
+    ]
+
+    SERVICE_NAMES = {
+        20: "ftp-data",
+        21: "ftp",
+        22: "ssh",
+        23: "telnet",
+        25: "smtp",
+        53: "dns",
+        80: "http",
+        110: "pop3",
+        111: "rpcbind",
+        135: "msrpc",
+        139: "netbios-ssn",
+        143: "imap",
+        443: "https",
+        445: "microsoft-ds",
+        465: "smtps",
+        587: "submission",
+        993: "imaps",
+        995: "pop3s",
+        1433: "mssql",
+        1521: "oracle",
+        1723: "pptp",
+        3306: "mysql",
+        3389: "rdp",
+        5432: "postgresql",
+        5900: "vnc",
+        6379: "redis",
+        8000: "http-alt",
+        8080: "http-proxy",
+        8443: "https-alt",
+        8888: "http-alt",
+        9200: "elasticsearch",
+        27017: "mongodb",
+    }
+
+    def __init__(
+        self,
+        request_engine: RequestEngine,
+        concurrent: int = 50,
+        timeout: float = 2.0,
+    ):
         self.request_engine = request_engine
+        self.concurrent = concurrent
+        self.timeout = timeout
         self.error_collector = ModuleErrorCollector("port_scan")
+        self.results: Dict[int, Dict[str, Any]] = {}
 
-    async def check_port(self, host: str, port: int) -> bool:
-        """Check if port is open."""
+    async def check_port(self, host: str, port: int) -> Dict[str, Any]:
+        """Check if port is open and get basic info."""
         try:
-            import socket
-
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
+            sock.settimeout(self.timeout)
             result = sock.connect_ex((host, port))
             sock.close()
-            return result == 0
+
+            if result == 0:
+                return {
+                    "port": port,
+                    "open": True,
+                    "service": self.SERVICE_NAMES.get(port, "unknown"),
+                }
+            return {"port": port, "open": False, "service": None}
+
         except Exception as e:
             self.error_collector.add(f"{host}:{port}", e, "check_port")
-            return False
+            return {"port": port, "open": False, "service": None, "error": str(e)}
 
-    async def quick_scan(self, host: str) -> Dict[int, bool]:
-        """Quick port scan for common ports."""
+    async def scan_range(
+        self, host: str, start_port: int, end_port: int
+    ) -> Dict[int, Dict[str, Any]]:
+        """Scan a range of ports."""
         results = {}
+        tasks = []
 
-        for port in self.COMMON_PORTS[:20]:
-            is_open = await self.check_port(host, port)
-            if is_open:
-                results[port] = True
+        for port in range(start_port, end_port + 1):
+            tasks.append(self.check_port(host, port))
+
+        semaphore = asyncio.Semaphore(self.concurrent)
+
+        async def bounded_check(port_num: int) -> Dict[str, Any]:
+            async with semaphore:
+                return await self.check_port(host, port_num)
+
+        bounded_tasks = [bounded_check(p) for p in range(start_port, end_port + 1)]
+
+        for coro in asyncio.as_completed(bounded_tasks):
+            result = await coro
+            if result.get("open"):
+                results[result["port"]] = result
+                self.results[result["port"]] = result
 
         return results
+
+    async def scan_ports(self, host: str, ports: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Scan specific ports."""
+        results = {}
+        semaphore = asyncio.Semaphore(self.concurrent)
+
+        async def bounded_check(port_num: int) -> Dict[str, Any]:
+            async with semaphore:
+                return await self.check_port(host, port_num)
+
+        tasks = [bounded_check(p) for p in ports]
+
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result.get("open"):
+                results[result["port"]] = result
+                self.results[result["port"]] = result
+
+        return results
+
+    async def quick_scan(self, host: str, top_n: int = 20) -> Dict[int, Dict[str, Any]]:
+        """Quick port scan for top common ports."""
+        ports_to_scan = self.COMMON_PORTS[:top_n]
+        return await self.scan_ports(host, ports_to_scan)
+
+    async def scan_top_ports(self, host: str, count: int = 100) -> Dict[int, Dict[str, Any]]:
+        """Scan top N ports."""
+        ports_to_scan = self.TOP_PORTS_100[:count]
+        return await self.scan_ports(host, ports_to_scan)
+
+    def get_open_ports(self) -> List[int]:
+        """Get list of open ports."""
+        return sorted(self.results.keys())
+
+    def get_results(self) -> Dict[int, Dict[str, Any]]:
+        """Get all scan results."""
+        return self.results
 
     def get_errors(self) -> List[Dict[str, Any]]:
         return self.error_collector.all()
@@ -354,6 +468,114 @@ class TechnologyFingerprinter:
     def get_last_versions(self) -> Dict[str, str]:
         """Return version hints detected in the latest fingerprint run."""
         return dict(self.last_versions)
+
+    def get_errors(self) -> List[Dict[str, Any]]:
+        return self.error_collector.all()
+
+
+class DNSLookup:
+    """DNS record lookup for domain reconnaissance."""
+
+    RECORD_TYPES = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]
+
+    COMMON_DNS_SERVERS = [
+        "8.8.8.8",
+        "8.8.4.4",
+        "1.1.1.1",
+        "1.0.0.1",
+        "9.9.9.9",
+        "208.67.222.222",
+    ]
+
+    def __init__(self):
+        self.error_collector = ModuleErrorCollector("dns_lookup")
+        self.results: Dict[str, List[str]] = {}
+
+    def _normalize_domain(self, value: str) -> str:
+        """Normalize input to a bare domain."""
+        candidate = value.strip()
+        if "://" in candidate:
+            parsed = urlparse(candidate)
+            return (parsed.hostname or candidate).strip(".")
+        return candidate.split("/")[0].strip(".")
+
+    def lookup(
+        self, domain: str, record_types: Optional[List[str]] = None
+    ) -> Dict[str, List[str]]:
+        """Perform DNS lookups for specified record types."""
+        domain = self._normalize_domain(domain)
+        self.results = {}
+
+        if record_types is None:
+            record_types = ["A", "MX", "NS", "TXT"]
+
+        for record_type in record_types:
+            if record_type.upper() not in self.RECORD_TYPES:
+                continue
+
+            try:
+                answers = dns.resolver.resolve(domain, record_type.upper())
+                records = [str(rdata) for rdata in answers]
+                self.results[record_type.upper()] = records
+            except dns.resolver.NXDOMAIN:
+                self.error_collector.add(domain, "NXDOMAIN", f"lookup_{record_type}")
+                self.results[record_type.upper()] = []
+            except dns.resolver.NoAnswer:
+                self.results[record_type.upper()] = []
+            except dns.resolver.NoNameservers:
+                self.error_collector.add(domain, "NoNameservers", f"lookup_{record_type}")
+                self.results[record_type.upper()] = []
+            except Exception as e:
+                self.error_collector.add(domain, e, f"lookup_{record_type}")
+                self.results[record_type.upper()] = []
+
+        return self.results
+
+    def reverse_lookup(self, ip: str) -> List[str]:
+        """Perform reverse DNS lookup."""
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            answers = dns.resolver.resolve(reverse_name, "PTR")
+            return [str(answers[0]).rstrip(".")] if answers else []
+        except dns.resolver.NXDOMAIN:
+            return []
+        except Exception as e:
+            self.error_collector.add(ip, e, "reverse_lookup")
+            return []
+
+    def check_glue(self, domain: str) -> Dict[str, List[str]]:
+        """Check for glue records (NS and A records for nameservers)."""
+        results = {}
+        try:
+            answers = dns.resolver.resolve(domain, "NS")
+            nameservers = [str(rdata) for rdata in answers]
+            results["NS"] = nameservers
+
+            for ns in nameservers[:5]:
+                try:
+                    a_answers = dns.resolver.resolve(ns, "A")
+                    if "A" not in results:
+                        results["A"] = []
+                    results["A"].extend([str(rdata) for rdata in a_answers])
+                except Exception:
+                    pass
+
+                try:
+                    aaaa_answers = dns.resolver.resolve(ns, "AAAA")
+                    if "AAAA" not in results:
+                        results["AAAA"] = []
+                    results["AAAA"].extend([str(rdata) for rdata in aaaa_answers])
+                except Exception:
+                    pass
+
+        except Exception as e:
+            self.error_collector.add(domain, e, "check_glue")
+
+        return results
+
+    def get_results(self) -> Dict[str, List[str]]:
+        """Get all lookup results."""
+        return self.results
 
     def get_errors(self) -> List[Dict[str, Any]]:
         return self.error_collector.all()

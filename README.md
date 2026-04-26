@@ -1,54 +1,88 @@
-# VULNIX - Scanner de Vulnerabilidade Web
+# VULNIX - Web Vulnerability Scanner
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.3.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/Python-3.11+-green" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-red" alt="License">
 </p>
 
 ---
 
-## Introdução
+## Introduction
 
-**VULNIX** é um scanner de vulnerabilidade web para testes de segurança autorizados, com foco em automação prática de recon e detecção.
+**VULNIX** is a comprehensive web vulnerability scanner for authorized security testing, with a focus on bug bounty reconnaissance, CMS detection, and vulnerability detection.
 
-> Aviso: use somente em alvos com autorização explícita. Uso não autorizado é ilegal.
-
----
-
-## Principais recursos
-
-- Crawler de endpoints e formulários
-- Engine HTTP assíncrona com retry/cookies/rate-limit
-- Detectores:
-  - SQL Injection
-  - XSS
-  - Security Headers
-  - Directory Discovery
-  - CSRF / IDOR / Auth checks
-  - HTTP Desync (Request Smuggling)
-  - Cloud Metadata SSRF
-  - WAF detection + bypass checks
-  - WebSocket security testing
-- Recon:
-  - Subdomain enumeration
-  - Technology fingerprint
-  - Hidden parameter fuzzing
-- Relatórios:
-  - JSON / HTML / Texto / SARIF
-  - Seção Recon consolidada
-  - Module Insights (evidence + remediation)
+> Warning: Use only on targets with explicit authorization. Unauthorized use is illegal.
 
 ---
 
-## Instalação
+## Key Features
 
-Pré-requisitos:
+### Vulnerability Scanning
+- SQL Injection detection
+- XSS (Reflected, Stored, DOM)
+- Security Headers analysis
+- Directory Discovery
+- CSRF / IDOR / Auth checks
+- HTTP Desync (Request Smuggling)
+- Cloud Metadata SSRF
+- WAF detection + bypass checks
+- WebSocket security testing
+- CVE Intelligence (NVD + KEV + EPSS)
+
+### Advanced Vulnerabilities (v1.3.0)
+- Server-Side Template Injection (SSTI)
+- Local/Remote File Inclusion (LFI/RFI)
+- Race Condition Detection
+- XML External Entity (XXE)
+- DOM-based Vulnerabilities
+
+### Reconnaissance Tools (v1.3.0)
+- DNS Lookup (A, AAAA, MX, NS, TXT, CNAME, SOA)
+- Port Scanner with service detection (100+ ports)
+- SSL/TLS Certificate Analysis
+- Robots.txt & Sitemap Analyzer
+- Link Extractor (internal/external/API endpoints)
+- GraphQL Security Scanner
+- Rate Limiting Detection
+- Subdomain Takeover Detection (18+ services)
+- Wayback Machine Analysis
+- WHOIS Lookup
+- JS Secret Extraction (AWS, Google, Stripe, JWT, etc.)
+- Hidden Parameter Discovery
+- Content Fuzzing
+
+### CMS Detection (v1.3.0)
+- WordPress + Vulnerable Plugins
+- Joomla + Components
+- Drupal
+- Magento
+- Shopify
+- Wix
+- Squarespace
+- Ghost
+- PrestaShop
+- Bitrix
+- SharePoint
+
+### Sensitive Pattern Matching
+- 12+ categories (AWS keys, passwords, JWT, etc.)
+
+### Reports
+- JSON / HTML / Text / SARIF
+- Consolidated Recon section
+- Module Insights (evidence + remediation)
+
+---
+
+## Installation
+
+Requirements:
 
 - Python 3.11+
 - pip
 
-Instalação:
+Installation:
 
 ```bash
 pip install -r requirements.txt
@@ -56,52 +90,116 @@ pip install -r requirements.txt
 
 ---
 
-## Uso
+## Usage
 
-Ajuda:
+Help:
 
 ```bash
 python run.py --help
 ```
 
-Exemplo básico:
+Basic example:
 
 ```bash
 python run.py https://example.com
 ```
 
-### Presets de scan
+### Scan Presets
 
 ```bash
-# rápido
+# quick
 python run.py https://example.com --mode quick
 
-# padrão
+# standard
 python run.py https://example.com --mode standard
 
-# profundo
+# deep
 python run.py https://example.com --mode deep -v -o reports/deep_scan
 ```
 
-### Exemplo completo com módulos avançados
+### Full Recon (All Tools at Once)
+
+```bash
+python run.py https://example.com --recon-all
+```
+
+This command runs ALL scanners:
+- DNS Lookup
+- Port Scanning (50 ports)
+- SSL/TLS Analysis
+- GraphQL Scanner
+- Rate Limiting Detection
+- Subdomain Takeover
+- Wayback Analysis
+- WHOIS Lookup
+- CMS Detection
+- JS Secret Extraction
+- Parameter Discovery
+- Content Fuzzing
+- Sensitive Pattern Matching
+- All vulnerability scans
+
+### Individual Tools
+
+```bash
+# CMS Detection (WordPress, Joomla, Drupal, etc)
+python run.py https://example.com --cms
+
+# CVE Intelligence
+python run.py https://example.com --cve-intel
+
+# DNS + Ports + SSL
+python run.py https://example.com --dns --port-scan --ssl
+
+# GraphQL Security
+python run.py https://example.com --graphql
+
+# Subdomain Takeover
+python run.py example.com --takeover
+
+# JS Secrets Extraction
+python run.py https://example.com --js-secrets
+
+# Directory Fuzzing
+python run.py https://example.com --fuzz
+```
+
+### Advanced Vulnerabilities
+
+```bash
+# Server-Side Template Injection
+python run.py https://example.com --ssti
+
+# Local File Inclusion
+python run.py https://example.com --lfi
+
+# Race Conditions
+python run.py https://example.com --race
+
+# XXE Injection
+python run.py https://example.com --xxe
+
+# DOM Vulnerabilities
+python run.py https://example.com --dom
+
+# All vulnerability tests
+python run.py https://example.com --ssti --lfi --race --xxe --dom
+```
+
+### Complete Scan
 
 ```bash
 python run.py https://example.com \
-  --http-desync \
-  --cloud-metadata \
-  --waf \
-  --waf-bypass \
-  --websocket \
+  --recon-all \
+  --cms \
   --cve-intel \
-  --subs \
-  --param-fuzz \
-  --tech \
+  --ssti --lfi --race --xxe --dom \
   --format both \
-  -o reports/scan_full \
+  -o reports/full_scan \
   -v
 ```
 
-### Atualizar cache CVE (sem scan)
+### Update CVE Cache
 
 ```bash
 python run.py --update-cve-cache
@@ -109,51 +207,94 @@ python run.py --update-cve-cache
 
 ---
 
-## Opções principais
+## Command Options
 
-| Argumento | Descrição | Padrão |
-|---|---|---|
-| `--mode` | Perfil de scan (`quick`, `standard`, `deep`) | `standard` |
-| `-t, --timeout` | Timeout por requisição (segundos) | `30` |
-| `-d, --depth` | Profundidade máxima do crawler | `3` |
-| `-u, --urls` | Máximo de URLs a crawlar | `100` |
-| `--no-sqli` | Desabilita SQLi | `false` |
-| `--no-xss` | Desabilita XSS | `false` |
-| `--no-headers` | Desabilita headers | `false` |
-| `--dirscan` | Habilita directory discovery | `false` |
-| `--http-desync` | Habilita HTTP desync/smuggling | `false` |
-| `--cloud-metadata` | Habilita cloud metadata SSRF | `false` |
-| `--waf` | Habilita detecção de WAF | `false` |
-| `--waf-bypass` | Habilita testes de bypass de WAF | `false` |
-| `--websocket` | Habilita testes de segurança WebSocket | `false` |
-| `--cve-intel` | Habilita correlação de CVEs (NVD + KEV + EPSS) | `false` |
-| `--cve-intel-offline` | Usa apenas cache local para CVE intel | `false` |
-| `--update-cve-cache` | Atualiza cache local de CVEs antes do scan (ou isolado) | `false` |
-| `--subs` | Habilita enumeração de subdomínios | `false` |
-| `--subs-brute` | Habilita brute-force de subdomínios | `false` |
-| `--param-fuzz` | Habilita fuzz de parâmetros | `false` |
-| `--cors` | Habilita checagem de CORS | `false` |
-| `--ssrf` | Habilita checagem de SSRF | `false` |
-| `--redirect` | Habilita checagem de open redirect | `false` |
-| `--tech` | Habilita fingerprint de tecnologia | `false` |
-| `--recon` | Ativa recon completo | `false` |
-| `-f, --format` | Formato de relatório (`json`, `html`, `text`, `both`) | `both` |
-| `-o, --output` | Prefixo de arquivo de saída | `None` |
-| `-v, --verbose` | Verbose | `false` |
+| Argument | Description |
+|---|---|
+| **Scan Profile** |
+| `--mode` | Scan profile (`quick`, `standard`, `deep`) |
+| `-t, --timeout` | Request timeout (seconds) |
+| `-d, --depth` | Maximum crawl depth |
+| `-u, --urls` | Maximum URLs to crawl |
+| **Core Scanning** |
+| `--no-sqli` | Disable SQLi |
+| `--no-xss` | Disable XSS |
+| `--no-headers` | Disable headers analysis |
+| `--dirscan` | Enable directory discovery |
+| `--http-desync` | Enable HTTP desync |
+| `--cloud-metadata` | Enable cloud metadata SSRF |
+| `--waf` | Enable WAF detection |
+| `--waf-bypass` | Enable WAF bypass tests |
+| `--websocket` | Enable WebSocket tests |
+| `--cve-intel` | Enable CVE correlation |
+| **Reconnaissance** |
+| `--recon` | Enable bug bounty recon |
+| `--recon-all` | Run ALL recon tools |
+| `--dns` | Enable DNS lookup |
+| `--dns-records` | DNS record types |
+| `--port-scan` | Enable port scanning |
+| `--top-ports` | Number of top ports |
+| `--ssl` | Enable SSL/TLS analysis |
+| `--tls-check` | Check TLS vulnerabilities |
+| `--graphql` | GraphQL security scanner |
+| `--rate-limit` | Rate limiting detection |
+| `--proxy` | Use proxy |
+| **Bug Bounty** |
+| `--takeover` | Subdomain takeover check |
+| `--wayback` | Wayback Machine analysis |
+| `--whois` | WHOIS lookup |
+| **Advanced** |
+| `--js-secrets` | Extract JS secrets |
+| `--params` | Discover parameters |
+| `--fuzz` | Directory fuzzing |
+| `--pattern` | Pattern matching |
+| **CMS & Tech** |
+| `--cms` | Detect CMS |
+| `--tech` | Technology fingerprint |
+| **Advanced Vulns** |
+| `--ssti` | Server-Side Template Injection |
+| `--lfi` | Local File Inclusion |
+| `--race` | Race conditions |
+| `--xxe` | XML External Entity |
+| `--dom` | DOM vulnerabilities |
+| **Output** |
+| `-f, --format` | Report format |
+| `-o, --output` | Output file prefix |
+| `-v, --verbose` | Verbose output |
 
 ---
 
-## Estrutura do projeto
+## Project Structure
 
-```text
+```
 vulnix/
 ├── cli/
+│   ├── main.py           # CLI argument parser
+│   └── commands.py       # Terminal display
 ├── config/
+│   └── settings.py       # Configuration
 ├── core/
-├── integrations/
+│   ├── scanner.py       # Main scan engine
+│   ├── crawler.py      # Web crawler
+│   ├── fuzzer.py      # Fuzzing engine
+│   ├── request_engine.py
+│   └── ...
 ├── modules/
+│   ├── sqli.py       # SQL injection
+│   ├── xss.py        # XSS detection
+│   ├── headers.py    # Security headers
+│   ├── recon.py      # DNS + Port scan
+│   ├── ssl.py        # SSL/TLS analysis
+│   ├── robots.py    # Robots.txt
+│   ├── linkextractor.py
+│   ├── graphql.py   # GraphQL scanner
+│   ├── rate_limit.py
+│   ├── proxy.py
+│   ├── cms_detect.py # CMS + CVE fingerprint
+│   ├── advanced_vulns.py  # SSTI, LFI, XXE, Race, DOM
+│   ├── recon_more.py     # Takeover + Wayback + WHOIS
+│   └── recon_advanced.py  # JS Secrets + Params + Fuzzing
 ├── tests/
-├── wordlists/
 ├── requirements.txt
 ├── run.py
 └── README.md
@@ -161,7 +302,7 @@ vulnix/
 
 ---
 
-## Testes
+## Testing
 
 ```bash
 python -m pytest tests -q
@@ -169,15 +310,58 @@ python -m pytest tests -q
 
 ---
 
-## Ética e uso responsável
+## CMS Detection
 
-1. Use apenas em alvos autorizados.
-2. Não faça exploração destrutiva.
-3. Respeite limites de requisição.
-4. Documente escopo e execução.
+The scanner detects 11+ CMS platforms:
+
+| CMS | Indicators |
+|---|---|
+| WordPress | wp-admin, wp-content, wp-json |
+| Joomla | /administrator, components/com_ |
+| Drupal | /modules, drupal.settings |
+| Magento | skin/frontend, /app/ |
+| Shopify | myshopify.com |
+| Wix | wixsite.com |
+| Squarespace | squarespace.com |
+| Ghost | ghost.org |
+| PrestaShop | /modules, prestashop |
+| Bitrix | /bitrix/ |
+| SharePoint | _layouts, MicrosoftSharePoint |
+
+### Vulnerable Plugins Detected
+- revslider, slider-revolution
+- contact-form-7, wordfence
+- elementor, divi-builder
+- akismet, yoast
 
 ---
 
-## Licença
+## Sensitivity Patterns (GF-style)
+
+12+ categories of sensitive data:
+
+- AWS Keys (`AKIA...`)
+- Google API Keys (`AIza...`)
+- Stripe Keys (`sk_live_...`)
+- SendGrid, Twilio, Mailgun Keys
+- Hardcoded Passwords
+- JWT Tokens
+- Private Keys
+- Firebase Tokens
+- GitHub OAuth Tokens
+- Slack Tokens
+
+---
+
+## Ethical Use
+
+1. Use only on authorized targets.
+2. Do not perform destructive exploitation.
+3. Respect request rate limits.
+4. Document scope and execution.
+
+---
+
+## License
 
 MIT.

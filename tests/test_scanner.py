@@ -580,9 +580,9 @@ def test_port_scanner_collects_errors():
     scanner = PortScanner(engine)
 
     with patch.object(__import__("socket").socket, "connect_ex", side_effect=RuntimeError("socket unavailable")):
-        is_open = asyncio.run(scanner.check_port("127.0.0.1", 80))
+        result = asyncio.run(scanner.check_port("127.0.0.1", 80))
 
-    assert is_open is False
+    assert result["open"] is False
     errors = scanner.get_errors()
     assert len(errors) == 1
     assert errors[0]["module"] == "port_scan"

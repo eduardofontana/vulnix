@@ -63,6 +63,12 @@ class ReportGenerator:
         subdomains: List[str] = []
         technologies: List[str] = []
         hidden_parameters: List[Dict[str, str]] = []
+        dns_records: Dict[str, List[str]] = {}
+        ports: List[Dict[str, Any]] = []
+        ssl_info: List[Dict[str, Any]] = []
+        robots_data: List[Dict[str, Any]] = []
+        sitemap_data: List[Dict[str, Any]] = []
+        extracted_links: Dict[str, Any] = {}
 
         for finding in findings:
             if finding.type == "subdomain":
@@ -86,16 +92,60 @@ class ReportGenerator:
                             "parameter": parameter_name,
                         }
                     )
+                continue
+
+            if finding.type == "dns_record":
+                details = finding.details or {}
+                record_type = details.get("record_type", "unknown")
+                value = details.get("value", "")
+                if record_type not in dns_records:
+                    dns_records[record_type] = []
+                if value and value not in dns_records[record_type]:
+                    dns_records[record_type].append(value)
+                continue
+
+            if finding.type == "port":
+                port_info = finding.details or {}
+                if port_info:
+                    ports.append(port_info)
+                continue
+
+            if finding.type == "ssl_cert":
+                ssl_info.append(finding.details or {})
+                continue
+
+            if finding.type == "robots_txt":
+                robots_data.append(finding.details or {})
+                continue
+
+            if finding.type == "sitemap":
+                sitemap_data.append(finding.details or {})
+                continue
+
+            if finding.type == "link_extraction":
+                extracted_links = finding.details or {}
+                continue
 
         return {
             "summary": {
                 "subdomains_count": len(subdomains),
                 "technologies_count": len(technologies),
                 "hidden_parameters_count": len(hidden_parameters),
+                "dns_records_count": sum(len(v) for v in dns_records.values()),
+                "open_ports_count": len(ports),
+                "ssl_certs_count": len(ssl_info),
+                "robots_paths_count": len(robots_data),
+                "sitemap_urls_count": len(sitemap_data),
             },
             "subdomains": subdomains,
             "technologies": technologies,
             "hidden_parameters": hidden_parameters,
+            "dns_records": dns_records,
+            "ports": ports,
+            "ssl_info": ssl_info,
+            "robots": robots_data,
+            "sitemap": sitemap_data,
+            "extracted_links": extracted_links,
         }
 
     def _build_module_insights(self, findings: List[Finding]) -> Dict[str, List[Dict[str, Any]]]:

@@ -30,8 +30,8 @@ class Fuzzer:
         self.error_collector = ModuleErrorCollector("fuzzing")
 
     def _compute_hash(self, content: str) -> str:
-        """Compute MD5 hash of content."""
-        return hashlib.md5(content.encode()).hexdigest()
+        """Compute SHA-256 hash of content for similarity comparison."""
+        return hashlib.sha256(content.encode(), usedforsecurity=True).hexdigest()
 
     def _compute_similarity(self, response1: str, response2: str) -> float:
         """Compute similarity ratio between two responses."""

@@ -26,11 +26,36 @@ from modules.cloud_metadata import CloudMetadataDetector
 from modules.waf_detector import WAFDetector
 from modules.websocket import WebSocketTester
 from modules.cve_intel import CVEIntelligenceDetector
-from modules.recon import SubdomainEnumerator, TechnologyFingerprinter
+from modules.recon import SubdomainEnumerator, TechnologyFingerprinter, PortScanner, DNSLookup
 from modules.bugbounty import (
     ParameterBruteforcer, CORSAnalyzer, JWTAnalyzer,
     HTTPHeaderInjection, OpenRedirectTester, ServerSideRequestForgery
 )
+from modules.ssl import SSLCertificateInfo
+from modules.robots import RobotsSitemapAnalyzer
+from modules.linkextractor import LinkExtractor
+from modules.graphql import GraphQLScanner
+from modules.rate_limit import RateLimitDetector
+from modules.recon_more import (
+    SubdomainEnumerator,
+    SubdomainTakeover,
+    WaybackAnalyzer,
+    WHOISLookup,
+)
+from modules.recon_advanced import (
+    JSSecretExtractor,
+    ParameterDiscovery,
+    PatternMatcher,
+    ContentFuzzer,
+)
+from modules.advanced_vulns import (
+    SSTIDetector,
+    LFIDetector,
+    RaceConditionDetector,
+    XXEDetector,
+    DOMScanner,
+)
+from modules.cms_detect import CMSDetector, ExploitDetection
 from config.settings import ScanConfig, VulnerabilityConfig, DEFAULT_WORDLIST
 
 
@@ -170,6 +195,28 @@ class ScanEngine:
             request_engine=self.request_engine,
         )
 
+        self.dns_lookup = DNSLookup()
+        self.port_scanner = PortScanner(request_engine=self.request_engine)
+        self.ssl_analyzer = SSLCertificateInfo(request_engine=self.request_engine)
+        self.robots_analyzer = RobotsSitemapAnalyzer(request_engine=self.request_engine)
+        self.link_extractor = LinkExtractor(request_engine=self.request_engine)
+        self.graphql_scanner = GraphQLScanner(request_engine=self.request_engine)
+        self.rate_limit_detector = RateLimitDetector(request_engine=self.request_engine)
+        self.subdomain_takeover = SubdomainTakeover(request_engine=self.request_engine)
+        self.wayback_analyzer = WaybackAnalyzer(request_engine=self.request_engine)
+        self.whois_lookup = WHOISLookup()
+        self.js_secret_extractor = JSSecretExtractor(request_engine=self.request_engine)
+        self.param_discovery = ParameterDiscovery(request_engine=self.request_engine)
+        self.pattern_matcher = PatternMatcher(request_engine=self.request_engine)
+        self.content_fuzzer = ContentFuzzer(request_engine=self.request_engine)
+        self.ssti_detector = SSTIDetector(request_engine=self.request_engine)
+        self.lfi_detector = LFIDetector(request_engine=self.request_engine)
+        self.race_detector = RaceConditionDetector(request_engine=self.request_engine)
+        self.xxe_detector = XXEDetector(request_engine=self.request_engine)
+        self.dom_scanner = DOMScanner(request_engine=self.request_engine)
+        self.cms_detector = CMSDetector(request_engine=self.request_engine)
+        self.exploit_detection = ExploitDetection(request_engine=self.request_engine)
+
         self.scan_result: Optional[ScanResult] = None
         self.wordlist: List[str] = DEFAULT_WORDLIST
         self.quick_scan: bool = False
@@ -181,6 +228,32 @@ class ScanEngine:
         self.do_ssrf_check: bool = False
         self.do_redirect_check: bool = False
         self.do_jwt_check: bool = False
+        self.do_dns_lookup: bool = False
+        self.dns_records: Optional[List[str]] = None
+        self.do_port_scan: bool = False
+        self.port_range: Optional[str] = None
+        self.top_ports: int = 20
+        self.do_ssl_analysis: bool = False
+        self.do_tls_check: bool = False
+        self.do_robots_analysis: bool = False
+        self.do_sitemap_analysis: bool = False
+        self.do_link_extraction: bool = False
+        self.do_graphql_scan: bool = False
+        self.do_rate_limit: bool = False
+        self.do_takeover: bool = False
+        self.do_wayback: bool = False
+        self.do_whois: bool = False
+        self.do_js_secrets: bool = False
+        self.do_param_discovery: bool = False
+        self.do_content_fuzz: bool = False
+        self.do_pattern_scan: bool = False
+        self.do_ssti: bool = False
+        self.do_lfi: bool = False
+        self.do_race: bool = False
+        self.do_xxe: bool = False
+        self.do_dom: bool = False
+        self.do_cms: bool = False
+        self.do_ssti: bool = False
         self._error_collectors: Dict[str, ModuleErrorCollector] = {}
         self._captured_error_signatures: Set[tuple] = set()
 
@@ -326,6 +399,26 @@ class ScanEngine:
             (self.jwt_analyzer, "jwt"),
             (self.ssrf_tester, "ssrf"),
             (self.redirect_tester, "open_redirect"),
+            (self.dns_lookup, "dns_lookup"),
+            (self.port_scanner, "port_scan"),
+            (self.ssl_analyzer, "ssl_cert"),
+            (self.robots_analyzer, "robots_sitemap"),
+            (self.link_extractor, "link_extractor"),
+            (self.graphql_scanner, "graphql"),
+            (self.rate_limit_detector, "rate_limit"),
+            (self.subdomain_takeover, "takeover"),
+            (self.wayback_analyzer, "wayback"),
+            (self.whois_lookup, "whois"),
+            (self.js_secret_extractor, "js_secrets"),
+            (self.param_discovery, "params"),
+            (self.pattern_matcher, "patterns"),
+            (self.content_fuzzer, "fuzz"),
+            (self.ssti_detector, "ssti"),
+            (self.lfi_detector, "lfi"),
+            (self.race_detector, "race"),
+            (self.xxe_detector, "xxe"),
+            (self.dom_scanner, "dom"),
+            (self.cms_detector, "cms"),
         ]
         for module_instance, fallback in modules_to_collect:
             self._collect_module_errors(module_instance, fallback)
@@ -395,7 +488,15 @@ class ScanEngine:
             return []
 
         self._log("Analyzing security headers")
-        findings = await self.headers_analyzer.analyze_url(target)
+        result = await self.headers_analyzer.analyze_url(target)
+        
+        if isinstance(result, dict):
+            findings = result.get("security_headers", [])
+        elif isinstance(result, list):
+            findings = result
+        else:
+            findings = []
+            
         self._log(f"Headers analysis complete: {len(findings)} headers checked")
         return findings
 
@@ -484,6 +585,12 @@ class ScanEngine:
             progress_callback(f"Found {len(endpoints)} endpoints")
 
         all_findings = []
+
+        from urllib.parse import urlparse as urllib_urlparse
+
+        parsed_target = urllib_urlparse(target_url)
+        target_ip = None
+        host = parsed_target.hostname or target
 
         if progress_callback:
             progress_callback("Scanning for SQL injection...")
@@ -853,6 +960,450 @@ class ScanEngine:
                         "description": description,
                     })
 
+        if self.do_dns_lookup:
+            if progress_callback:
+                progress_callback("Performing DNS lookup...")
+
+            target_domain = parsed_target.hostname or target
+            try:
+                dns_results = await asyncio.to_thread(
+                    self.dns_lookup.lookup, target_domain, self.dns_records
+                )
+            except Exception as e:
+                self._record_error("dns_lookup", target_domain, e, "lookup")
+                dns_results = {}
+            
+            if isinstance(dns_results, dict):
+                for record_type, values in dns_results.items():
+                    if isinstance(values, list):
+                        for value in values[:10]:
+                            all_findings.append({
+                                "type": "dns_record",
+                                "url": target_domain,
+                                "severity": "info",
+                                "description": f"DNS {record_type}: {value}",
+                                "details": {"record_type": record_type, "value": value},
+                            })
+
+        if self.do_port_scan:
+            if progress_callback:
+                progress_callback("Scanning ports...")
+
+            target_ip_for_scan = target_ip
+            if not target_ip_for_scan:
+                try:
+                    import socket
+                    target_ip_for_scan = socket.gethostbyname(host)
+                except Exception:
+                    target_ip_for_scan = parsed_target.hostname or target
+
+            port_results = await self._execute_step(
+                module="port_scan",
+                url=target_ip_for_scan,
+                phase="scan",
+                operation=lambda: self.port_scanner.scan_top_ports(
+                    target_ip_for_scan, self.top_ports
+                ),
+                default={},
+            )
+            if isinstance(port_results, dict):
+                for port, info in port_results.items():
+                    if isinstance(info, dict):
+                        all_findings.append({
+                            "type": "port",
+                            "url": target_url,
+                            "severity": "info",
+                            "description": f"Port {port} open ({info.get('service', 'unknown')})",
+                            "details": {"port": port, "service": info.get("service", "unknown"), "open": info.get("open", False)},
+                        })
+
+        if self.do_ssl_analysis:
+            if progress_callback:
+                progress_callback("Analyzing SSL/TLS certificate...")
+
+            try:
+                ssl_results = await asyncio.to_thread(
+                    self.ssl_analyzer.analyze, target_url
+                )
+            except Exception as e:
+                self._record_error("ssl_cert", target_url, e, "analyze")
+                ssl_results = {}
+
+            if isinstance(ssl_results, dict) and ssl_results.get("certificate"):
+                cert = ssl_results["certificate"]
+                all_findings.append({
+                    "type": "ssl_cert",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"SSL Certificate: {cert.get('subject', 'N/A')} (expires: {cert.get('not_after', 'N/A')})",
+                    "details": cert,
+                })
+
+        if self.do_robots_analysis:
+            if progress_callback:
+                progress_callback("Analyzing robots.txt...")
+
+            try:
+                robots_results = await self.robots_analyzer.parse_robots(target_url)
+            except Exception as e:
+                self._record_error("robots_sitemap", target_url, e, "robots")
+                robots_results = {}
+
+            if isinstance(robots_results, dict) and robots_results.get("found"):
+                disallowed = robots_results.get("disallowed_paths", [])
+                all_findings.append({
+                    "type": "robots_txt",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"robots.txt found with {len(disallowed)} disallowed paths",
+                    "details": robots_results,
+                })
+
+        if self.do_sitemap_analysis:
+            if progress_callback:
+                progress_callback("Analyzing sitemap...")
+
+            try:
+                sitemap_results = await self.robots_analyzer.parse_sitemap(target_url)
+            except Exception as e:
+                self._record_error("robots_sitemap", target_url, e, "sitemap")
+                sitemap_results = {}
+
+            if isinstance(sitemap_results, dict) and sitemap_results.get("found"):
+                urls = sitemap_results.get("urls", [])
+                all_findings.append({
+                    "type": "sitemap",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"sitemap.xml found with {len(urls)} URLs",
+                    "details": sitemap_results,
+                })
+
+        if self.do_link_extraction:
+            if progress_callback:
+                progress_callback("Extracting links...")
+
+            try:
+                link_results = await self.link_extractor.extract_from_url(target_url)
+            except Exception as e:
+                self._record_error("link_extractor", target_url, e, "extract")
+                link_results = {}
+
+            if isinstance(link_results, dict) and link_results:
+                categorized = link_results.get("categorized", {})
+                api_endpoints = categorized.get("api_endpoints", [])
+                all_findings.append({
+                    "type": "link_extraction",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"Extracted {link_results.get('total_internal', 0)} internal, {link_results.get('total_external', 0)} external links, {len(api_endpoints)} API endpoints",
+                    "details": link_results,
+                })
+
+        if self.do_graphql_scan:
+            if progress_callback:
+                progress_callback("Scanning GraphQL endpoints...")
+
+            try:
+                graphql_results = await self.graphql_scanner.scan(target_url)
+            except Exception as e:
+                self._record_error("graphql", target_url, e, "scan")
+                graphql_results = []
+
+            for gq_result in graphql_results:
+                all_findings.append({
+                    "type": gq_result.get("type", "graphql"),
+                    "url": gq_result.get("endpoint", target_url),
+                    "severity": gq_result.get("severity", "info"),
+                    "description": gq_result.get("description", ""),
+                    "details": {k: v for k, v in gq_result.items() if k not in {"type", "endpoint", "severity", "description"}},
+                })
+
+        if self.do_rate_limit:
+            if progress_callback:
+                progress_callback("Detecting rate limiting...")
+
+            try:
+                rate_results = await self.rate_limit_detector.scan(target_url)
+            except Exception as e:
+                self._record_error("rate_limit", target_url, e, "scan")
+                rate_results = []
+
+            for rl_result in rate_results:
+                all_findings.append({
+                    "type": rl_result.get("type", "rate_limit"),
+                    "url": target_url,
+                    "severity": rl_result.get("severity", "info"),
+                    "description": rl_result.get("description", ""),
+                    "details": {k: v for k, v in rl_result.items() if k not in {"type", "url", "severity", "description"}},
+                })
+
+        if self.do_takeover:
+            if progress_callback:
+                progress_callback("Checking subdomain takeover...")
+
+            try:
+                target_domain = parsed_target.hostname or target
+                subdomains = await self.subdomain_takeover.scan_subdomains([target_domain])
+            except Exception as e:
+                self._record_error("takeover", target_domain, e, "scan")
+                subdomains = []
+
+            for tk_result in subdomains:
+                all_findings.append({
+                    "type": "subdomain_takeover",
+                    "url": f"https://{tk_result.get('subdomain', '')}",
+                    "severity": "high",
+                    "description": f"Potential takeover: {tk_result.get('service', 'unknown')} service",
+                    "details": {k: v for k, v in tk_result.items() if k not in {"subdomain", "vulnerable"}},
+                })
+
+        if self.do_wayback:
+            if progress_callback:
+                progress_callback("Analyzing Wayback snapshots...")
+
+            try:
+                target_domain = parsed_target.hostname or target
+                snapshots = await self.wayback_analyzer.get_snapshots(target_domain)
+            except Exception as e:
+                self._record_error("wayback", target_domain, e, "scan")
+                snapshots = []
+
+            if snapshots:
+                all_findings.append({
+                    "type": "wayback_snapshots",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"Found {len(snapshots)} historical snapshots",
+                    "details": {"snapshots": snapshots[:10]},
+                })
+
+        if self.do_whois:
+            if progress_callback:
+                progress_callback("Performing WHOIS lookup...")
+
+            try:
+                target_domain = parsed_target.hostname or target
+                whois_data = await self.whois_lookup.lookup(target_domain)
+            except Exception as e:
+                self._record_error("whois", target_domain, e, "lookup")
+                whois_data = {}
+
+            if whois_data and whois_data.get("registrar"):
+                all_findings.append({
+                    "type": "whois_info",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"Registrar: {whois_data.get('registrar', 'N/A')}",
+                    "details": whois_data,
+                })
+
+        if self.do_js_secrets:
+            if progress_callback:
+                progress_callback("Extracting JavaScript secrets...")
+
+            try:
+                js_findings = await self.js_secret_extractor.scan(target_url)
+            except Exception as e:
+                self._record_error("js_secrets", target_url, e, "scan")
+                js_findings = []
+
+            for js_finding in js_findings:
+                all_findings.append({
+                    "type": js_finding.get("type", "js_secret"),
+                    "url": js_finding.get("file", target_url),
+                    "severity": js_finding.get("severity", "medium"),
+                    "description": f"{js_finding.get('subtype', 'Secret')}: {js_finding.get('match', js_finding.get('count', ''))}",
+                    "details": {k: v for k, v in js_finding.items() if k not in {"type", "file", "severity", "description"}},
+                })
+
+        if self.do_param_discovery:
+            if progress_callback:
+                progress_callback("Discovering hidden parameters...")
+
+            try:
+                param_findings = await self.param_discovery.scan(target_url)
+            except Exception as e:
+                self._record_error("params", target_url, e, "scan")
+                param_findings = []
+
+            for param in param_findings[:50]:
+                all_findings.append({
+                    "type": "hidden_parameter",
+                    "url": target_url,
+                    "severity": "info",
+                    "description": f"Found parameter: {param.get('parameter')}",
+                })
+
+        if self.do_content_fuzz:
+            if progress_callback:
+                progress_callback("Fuzzing directories...")
+
+            try:
+                fuzz_findings = await self.content_fuzzer.scan(target_url)
+            except Exception as e:
+                self._record_error("fuzz", target_url, e, "scan")
+                fuzz_findings = []
+
+            for ff in fuzz_findings:
+                all_findings.append({
+                    "type": ff.get("type", "directory"),
+                    "url": ff.get("path", target_url),
+                    "severity": ff.get("severity", "low"),
+                    "description": f"Found: {ff.get('path')} (status: {ff.get('status')})",
+                })
+
+        if self.do_pattern_scan:
+            if progress_callback:
+                progress_callback("Scanning patterns...")
+
+            try:
+                pattern_findings = await self.pattern_matcher.scan(target_url)
+            except Exception as e:
+                self._record_error("patterns", target_url, e, "scan")
+                pattern_findings = []
+
+            for pf in pattern_findings:
+                all_findings.append({
+                    "type": "pattern_match",
+                    "url": target_url,
+                    "severity": pf.get("severity", "medium"),
+                    "description": f"Found {pf.get('count', 1)}x {pf.get('subtype', 'pattern')}",
+                    "details": {"pattern_type": pf.get("subtype")},
+                })
+
+        if self.do_ssti:
+            if progress_callback:
+                progress_callback("Testing for SSTI...")
+
+            try:
+                ssti_findings = await self.ssti_detector.scan_endpoint(
+                    target_url, ["q", "search", "query", "s", "id", "page"]
+                )
+            except Exception as e:
+                self._record_error("ssti", target_url, e, "scan")
+                ssti_findings = []
+
+            for sf in ssti_findings:
+                all_findings.append({
+                    "type": sf.get("type", "ssti"),
+                    "url": sf.get("url", target_url),
+                    "parameter": sf.get("parameter"),
+                    "severity": sf.get("severity", "high"),
+                    "description": f"SSTI detected ({sf.get('template', 'unknown')})",
+                    "details": {"template": sf.get("template"), "payload": sf.get("payload")},
+                })
+
+        if self.do_lfi:
+            if progress_callback:
+                progress_callback("Testing for LFI...")
+
+            try:
+                lfi_findings = await self.lfi_detector.scan_endpoint(
+                    target_url, ["file", "path", "page", "doc", "template"]
+                )
+            except Exception as e:
+                self._record_error("lfi", target_url, e, "scan")
+                lfi_findings = []
+
+            for lf in lfi_findings:
+                all_findings.append({
+                    "type": lf.get("type", "lfi"),
+                    "url": lf.get("url", target_url),
+                    "parameter": lf.get("parameter"),
+                    "severity": lf.get("severity", "high"),
+                    "description": f"{lf.get('type', 'LFI').upper()} detected",
+                    "details": {"payload": lf.get("payload")},
+                })
+
+        if self.do_race:
+            if progress_callback:
+                progress_callback("Testing for race conditions...")
+
+            try:
+                race_findings = await self.race_detector.scan_endpoint(
+                    target_url, ["amount", "quantity", "token", "id"]
+                )
+            except Exception as e:
+                self._record_error("race", target_url, e, "scan")
+                race_findings = []
+
+            for rf in race_findings:
+                all_findings.append({
+                    "type": rf.get("type", "race_condition"),
+                    "url": rf.get("url", target_url),
+                    "parameter": rf.get("parameter"),
+                    "severity": rf.get("severity", "medium"),
+                    "description": f"Race condition detected",
+                    "details": {"evidence": rf.get("evidence")},
+                })
+
+        if self.do_xxe:
+            if progress_callback:
+                progress_callback("Testing for XXE...")
+
+            try:
+                xxe_findings = await self.xxe_detector.scan_endpoint(target_url)
+            except Exception as e:
+                self._record_error("xxe", target_url, e, "scan")
+                xxe_findings = []
+
+            for xf in xxe_findings:
+                all_findings.append({
+                    "type": xf.get("type", "xxe"),
+                    "url": xf.get("url", target_url),
+                    "severity": xf.get("severity", "high"),
+                    "description": "XXE vulnerability detected",
+                    "details": {"payload": xf.get("payload")},
+                })
+
+        if self.do_dom:
+            if progress_callback:
+                progress_callback("Scanning for DOM vulnerabilities...")
+
+            try:
+                dom_findings = await self.dom_scanner.scan(
+                    target_url, ["q", "search", "query"]
+                )
+            except Exception as e:
+                self._record_error("dom", target_url, e, "scan")
+                dom_findings = []
+
+            for df in dom_findings:
+                all_findings.append({
+                    "type": df.get("type", "dom"),
+                    "url": df.get("url", target_url),
+                    "parameter": df.get("parameter"),
+                    "severity": df.get("severity", "medium"),
+                    "description": f"DOM vulnerability: {df.get('type', 'unknown')}",
+                    "details": {"source": df.get("source")},
+                })
+
+        if self.do_cms:
+            if progress_callback:
+                progress_callback("Detecting CMS...")
+
+            try:
+                cms_findings = await self.cms_detector.scan(target_url)
+            except Exception as e:
+                self._record_error("cms", target_url, e, "scan")
+                cms_findings = []
+
+            for cf in cms_findings:
+                severity = cf.get("severity", "info")
+                all_findings.append({
+                    "type": cf.get("type", "cms"),
+                    "url": cf.get("url", target_url),
+                    "parameter": cf.get("plugin"),
+                    "severity": severity,
+                    "description": cf.get("description", ""),
+                    "details": {
+                        "cms": cf.get("cms"),
+                        "version": cf.get("version"),
+                        "cve": cf.get("cve"),
+                    },
+                })
+
         for finding_data in all_findings:
             base_keys = {
                 "id",
@@ -867,6 +1418,8 @@ class ScanEngine:
                 "module",
             }
             details = {k: v for k, v in finding_data.items() if k not in base_keys}
+            if "details" in details:
+                details = details.get("details", {})
             finding = Finding(
                 id=f"finding_{len(self.scan_result.findings) + 1}",
                 type=finding_data.get("type", "unknown"),

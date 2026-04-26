@@ -56,6 +56,12 @@ class BugBountyConfig:
     method_tampering: bool = False
     port_scan: bool = False
     technology_fingerprint: bool = False
+    dns_lookup: bool = False
+    dns_records: List[str] = field(default_factory=lambda: ["A", "MX", "NS", "TXT"])
+    ssl_analysis: bool = False
+    robots_analysis: bool = False
+    sitemap_analysis: bool = False
+    link_extraction: bool = False
 
 
 @dataclass
