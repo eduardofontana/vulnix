@@ -538,21 +538,8 @@ def test_technology_fingerprinter_collects_errors():
     engine = RequestEngine()
     fingerprinter = TechnologyFingerprinter(engine)
 
-    class FailingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, *args, **kwargs):
-            raise RuntimeError("fingerprint failed")
-
-    with patch("modules.recon.httpx.AsyncClient", FailingClient):
-        results = asyncio.run(fingerprinter.fingerprint("https://example.com"))
+    engine.get = AsyncMock(side_effect=RuntimeError("fingerprint failed"))
+    results = asyncio.run(fingerprinter.fingerprint("https://example.com"))
 
     assert results == {}
     errors = fingerprinter.get_errors()
@@ -579,7 +566,10 @@ def test_port_scanner_collects_errors():
     engine = RequestEngine()
     scanner = PortScanner(engine)
 
-    with patch.object(__import__("socket").socket, "connect_ex", side_effect=RuntimeError("socket unavailable")):
+    async def failing_open_connection(*args, **kwargs):
+        raise RuntimeError("socket unavailable")
+
+    with patch("modules.recon.asyncio.open_connection", new=failing_open_connection):
         result = asyncio.run(scanner.check_port("127.0.0.1", 80))
 
     assert result["open"] is False
@@ -661,7 +651,7 @@ def test_cli_scan_mode_quick_enables_quick_scan_profile():
     captured = {}
 
     class DummyScanEngine:
-        def __init__(self, scan_config=None, vuln_config=None, verbose=False):
+        def __init__(self, scan_config=None, vuln_config=None, verbose=False, proxy_url=None):
             captured["vuln_config"] = vuln_config
             self.quick_scan = False
             self.do_subdomain_enum = False
@@ -703,7 +693,7 @@ def test_cli_scan_mode_deep_enables_deep_profile():
     captured = {}
 
     class DummyScanEngine:
-        def __init__(self, scan_config=None, vuln_config=None, verbose=False):
+        def __init__(self, scan_config=None, vuln_config=None, verbose=False, proxy_url=None):
             captured["vuln_config"] = vuln_config
             self.quick_scan = False
             self.do_subdomain_enum = False

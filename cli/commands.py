@@ -4,6 +4,8 @@ CLI Commands Module
 """
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from rich.console import Console
 from rich.table import Table
@@ -13,6 +15,7 @@ from rich.theme import Theme
 
 from core.scanner import ScanEngine, ScanResult
 from core.analyzer import ReportGenerator
+from core.state import ScanState, ScanCheckpoint
 from config.settings import ScanConfig, VulnerabilityConfig, DISCLAIMER_FULL
 
 BANNER = r"""
@@ -48,7 +51,7 @@ class VulnixCLI:
     def print_banner(self) -> None:
         """Print VULNIX banner."""
         self.console.print(f"[bold cyan1]{BANNER}[/bold cyan1]")
-        self.console.print("[dim]v1.0.0 | Web Vulnerability Scanner\n[/dim]")
+        self.console.print("[dim]v1.3.0 | Web Vulnerability Scanner\n[/dim]")
 
     def print_disclaimer(self) -> None:
         """Print the disclaimer."""
@@ -462,6 +465,140 @@ class VulnixCLI:
 
         self.console.print(Panel(table, title="[bold green]Directory Fuzzing[/bold green]"))
 
+    @staticmethod
+    def _finding_key(finding: Any) -> str:
+        """Build a stable key for finding diffing."""
+        return "|".join(
+            [
+                str(getattr(finding, "type", "")),
+                str(getattr(finding, "url", "")),
+                str(getattr(finding, "parameter", "")),
+                str(getattr(finding, "payload", "")),
+                str(getattr(finding, "severity", "")),
+                str(getattr(finding, "description", "")),
+            ]
+        )
+
+    def _load_baseline_keys(self, baseline_file: Optional[str]) -> set[str]:
+        """Load baseline finding keys from a JSON report file."""
+        if not baseline_file:
+            return set()
+        baseline_path = Path(baseline_file)
+        if not baseline_path.exists():
+            self.console.print(f"[yellow]Baseline file not found: {baseline_file}[/yellow]")
+            return set()
+
+        try:
+            payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+            findings = payload.get("findings", [])
+            keys = set()
+            for f in findings:
+                if not isinstance(f, dict):
+                    continue
+                keys.add(
+                    "|".join(
+                        [
+                            str(f.get("type", "")),
+                            str(f.get("url", "")),
+                            str(f.get("parameter", "")),
+                            str(f.get("payload", "")),
+                            str(f.get("severity", "")),
+                            str(f.get("description", "")),
+                        ]
+                    )
+                )
+            return keys
+        except Exception as e:
+            self.console.print(f"[yellow]Failed to load baseline file: {e}[/yellow]")
+            return set()
+
+    def _compute_diff(self, result: ScanResult, baseline_keys: set[str]) -> Dict[str, Any]:
+        """Compute new findings against baseline."""
+        if not baseline_keys:
+            return {"new_findings": [], "new_count": 0, "baseline_count": 0}
+
+        new_findings = [f for f in result.findings if self._finding_key(f) not in baseline_keys]
+        return {
+            "new_findings": [
+                {
+                    "id": f.id,
+                    "type": f.type,
+                    "url": f.url,
+                    "severity": f.severity,
+                    "description": f.description,
+                }
+                for f in new_findings
+            ],
+            "new_count": len(new_findings),
+            "baseline_count": len(baseline_keys),
+        }
+
+    def _write_jsonl(self, result: ScanResult, jsonl_file: str) -> None:
+        """Write findings in JSONL format."""
+        rows = []
+        for finding in result.findings:
+            rows.append(
+                json.dumps(
+                    {
+                        "target": result.target,
+                        "scan_start": result.start_time,
+                        "scan_end": result.end_time,
+                        "id": finding.id,
+                        "type": finding.type,
+                        "url": finding.url,
+                        "parameter": finding.parameter,
+                        "severity": finding.severity,
+                        "description": finding.description,
+                        "module": finding.module,
+                        "timestamp": finding.timestamp,
+                        "details": finding.details,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        Path(jsonl_file).write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+
+    async def _emit_siem(self, result: ScanResult, siem_target: str) -> None:
+        """Emit findings to SIEM-compatible endpoint."""
+        if siem_target not in {"splunk", "elk"}:
+            return
+
+        endpoint = (
+            "http://localhost:8088/services/collector/event"
+            if siem_target == "splunk"
+            else "http://localhost:9200/vulnix-findings/_doc"
+        )
+
+        headers = {"Content-Type": "application/json"}
+        payloads = []
+        for finding in result.findings:
+            event = {
+                "target": result.target,
+                "scan_time": result.start_time,
+                "finding": {
+                    "id": finding.id,
+                    "type": finding.type,
+                    "severity": finding.severity,
+                    "url": finding.url,
+                    "description": finding.description,
+                    "module": finding.module,
+                    "details": finding.details,
+                },
+            }
+            if siem_target == "splunk":
+                payloads.append({"event": event, "sourcetype": "vulnix"})
+            else:
+                payloads.append(event)
+
+        from core.request_engine import RequestEngine
+
+        emitter = RequestEngine(timeout=10, max_retries=1, delay=0.1)
+        try:
+            for item in payloads[:200]:
+                await emitter.post(endpoint, content=json.dumps(item).encode("utf-8"), headers=headers)
+        finally:
+            await emitter.close()
+
     async def run_scan(
         self,
         target: str,
@@ -507,12 +644,32 @@ class VulnixCLI:
         xxe_scan: bool = False,
         dom_scan: bool = False,
         cms_detect: bool = False,
+        safe_mode: bool = False,
+        aggressive_mode: bool = False,
+        resume_state_file: Optional[str] = None,
+        checkpoint_dir: Optional[str] = None,
+        jsonl_output: Optional[str] = None,
+        siem_target: Optional[str] = None,
+        baseline_file: Optional[str] = None,
+        diff_output: Optional[str] = None,
     ) -> ScanResult:
         """Run a vulnerability scan."""
         from urllib.parse import urlparse
         import socket
 
+        target = target or ""
+        scan_state = ScanState(resume_state_file or "vulnix_state.json")
+        checkpoint = ScanCheckpoint(checkpoint_dir or "checkpoints")
+        resumed_state = None
+        if resume_state_file:
+            resumed_state = scan_state.load()
+            if resumed_state and not target:
+                target = resumed_state.get("target", "")
+        if not target:
+            raise ValueError("No target provided and no valid resume state found.")
+
         target_url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+        baseline_keys = self._load_baseline_keys(baseline_file)
 
         self.print_banner()
         self.print_disclaimer()
@@ -540,7 +697,7 @@ class VulnixCLI:
         from modules.recon import TechnologyFingerprinter
         from core.request_engine import RequestEngine
 
-        req_engine = RequestEngine()
+        req_engine = RequestEngine(proxy_url=proxy_url)
         tech_fingerprinter = TechnologyFingerprinter(req_engine)
         technologies = None
         try:
@@ -562,6 +719,12 @@ class VulnixCLI:
             await req_engine.close()
 
         self.print_target_info(target_url, ip=target_ip, technologies=technologies)
+        if resumed_state:
+            resumed_phase = resumed_state.get("phase", "unknown")
+            resumed_progress = resumed_state.get("progress", 0)
+            self.console.print(
+                f"[cyan]Resume state loaded:[/cyan] phase={resumed_phase}, progress={resumed_progress}%"
+            )
 
         if scan_config is None:
             scan_config = ScanConfig()
@@ -569,11 +732,32 @@ class VulnixCLI:
         if vuln_config is None:
             vuln_config = VulnerabilityConfig()
 
+        if safe_mode:
+            scan_config.delay = max(scan_config.delay, 1.0)
+            scan_config.concurrent_requests = min(scan_config.concurrent_requests, 2)
+            vuln_config.enable_http_desync = False
+            vuln_config.enable_waf_bypass = False
+            vuln_config.enable_websocket = False
+            self.console.print("[yellow]Safe mode enabled: active/destructive checks minimized.[/yellow]")
+
+        if aggressive_mode:
+            scan_config.delay = min(scan_config.delay, 0.1)
+            scan_config.concurrent_requests = max(scan_config.concurrent_requests, 15)
+            vuln_config.enable_http_desync = True
+            vuln_config.enable_websocket = True
+            vuln_config.enable_waf_bypass = True
+            self.console.print("[red]Aggressive mode enabled: higher request pressure and active checks.[/red]")
+
         mode = (scan_mode or "standard").lower()
         mode_quick = mode == "quick"
         mode_deep = mode == "deep"
 
-        scanner = ScanEngine(scan_config=scan_config, vuln_config=vuln_config, verbose=verbose)
+        scanner = ScanEngine(
+            scan_config=scan_config,
+            vuln_config=vuln_config,
+            verbose=verbose,
+            proxy_url=proxy_url,
+        )
         scanner.quick_scan = quick_scan or recon or mode_quick
         scanner.do_subdomain_enum = subdomain_enum or subdomain_bruteforce or recon or mode_deep
         scanner.subdomain_bruteforce = subdomain_bruteforce or (recon and mode_deep) or mode_deep
@@ -636,8 +820,23 @@ class VulnixCLI:
             scanner.do_content_fuzz = True
             scanner.do_pattern_scan = True
 
+        if proxy_url:
+            self.console.print(f"[cyan]Proxy enabled:[/cyan] {proxy_url}")
+
         if verbose:
             self.console.print("[yellow]Verbose mode enabled[/yellow]")
+
+        scan_state.start_new_scan(
+            target_url,
+            {
+                "scan_mode": scan_mode,
+                "safe_mode": safe_mode,
+                "aggressive_mode": aggressive_mode,
+                "proxy_url": proxy_url,
+                "recon": recon,
+                "recon_all": recon_all,
+            },
+        )
 
         try:
             with Progress(
@@ -690,6 +889,18 @@ class VulnixCLI:
                             progress.update(task, completed=min(target, current + 1))
                         await asyncio.sleep(0.03)
 
+                phase_map = {
+                    "Crawling target": "crawl",
+                    "Scanning for SQL injection": "sqli",
+                    "Scanning for XSS": "xss",
+                    "Analyzing security headers": "headers",
+                    "Scanning directories": "dirscan",
+                    "Checking CSRF protection": "csrf",
+                    "Checking for IDOR": "idor",
+                    "Checking authentication": "auth",
+                    "Correlating CVEs from technology fingerprint": "report",
+                }
+
                 def update_progress(message: str):
                     target_percent = None
                     for phase, percent in phase_to_percent.items():
@@ -706,6 +917,21 @@ class VulnixCLI:
                     else:
                         progress.update(task, description=f"[cyan]{message}")
 
+                    for phase_prefix, phase_name in phase_map.items():
+                        if message.startswith(phase_prefix):
+                            scan_state.update_phase(phase_name, {"message": message})
+                            scan_state.complete_phase(phase_name)
+                            checkpoint.save_checkpoint(
+                                scan_id=host.replace(".", "_"),
+                                data={
+                                    "target": target_url,
+                                    "phase": phase_name,
+                                    "message": message,
+                                    "progress": progress_target["value"],
+                                },
+                            )
+                            break
+
                 animation_task = asyncio.create_task(animate_progress())
                 try:
                     result = await scanner.full_scan(target, progress_callback=update_progress)
@@ -721,6 +947,22 @@ class VulnixCLI:
 
         if pre_scan_errors:
             result.errors.extend(pre_scan_errors)
+
+        scan_state.state["findings"] = [
+            {
+                "id": f.id,
+                "type": f.type,
+                "url": f.url,
+                "parameter": f.parameter,
+                "payload": f.payload,
+                "severity": f.severity,
+                "description": f.description,
+                "details": f.details,
+            }
+            for f in result.findings
+        ]
+        scan_state.complete_phase("report")
+        scan_state.complete_scan()
 
         self.console.print()
         self.print_scan_summary(result)
@@ -761,5 +1003,26 @@ class VulnixCLI:
             self.report_generator.generate_text_report(result)
             if output_file:
                 self.report_generator.generate_text_report(result, f"{output_file}.txt")
+
+        if jsonl_output:
+            self._write_jsonl(result, jsonl_output)
+            self.console.print(f"[green]JSONL report saved to {jsonl_output}[/green]")
+
+        diff_payload = self._compute_diff(result, baseline_keys)
+        if baseline_keys:
+            self.console.print(
+                f"[cyan]Baseline diff:[/cyan] {diff_payload['new_count']} new finding(s) "
+                f"against {diff_payload['baseline_count']} baseline entries."
+            )
+            if diff_output:
+                Path(diff_output).write_text(
+                    json.dumps(diff_payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                self.console.print(f"[green]Diff report saved to {diff_output}[/green]")
+
+        if siem_target:
+            await self._emit_siem(result, siem_target.lower())
+            self.console.print(f"[green]SIEM export completed ({siem_target}).[/green]")
 
         return result

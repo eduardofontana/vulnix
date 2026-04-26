@@ -378,6 +378,56 @@ Examples:
         help="Extract links from crawled pages",
     )
 
+    parser.add_argument(
+        "--safe",
+        action="store_true",
+        help="Safe mode: reduce request pressure and disable risky active checks",
+    )
+
+    parser.add_argument(
+        "--aggressive",
+        action="store_true",
+        help="Aggressive mode: increase request pressure and enable active checks",
+    )
+
+    parser.add_argument(
+        "--resume",
+        type=str,
+        help="Resume state file path (e.g., vulnix_state.json)",
+    )
+
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints",
+        help="Directory for periodic checkpoints (default: checkpoints)",
+    )
+
+    parser.add_argument(
+        "--jsonl-output",
+        type=str,
+        help="Write findings in JSONL format to the given file",
+    )
+
+    parser.add_argument(
+        "--siem",
+        type=str,
+        choices=["splunk", "elk"],
+        help="Emit findings to SIEM endpoint profile (splunk or elk)",
+    )
+
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        help="Baseline JSON report for finding diff",
+    )
+
+    parser.add_argument(
+        "--diff-output",
+        type=str,
+        help="Write baseline diff report to file (JSON)",
+    )
+
     args = parser.parse_args()
 
     cli = VulnixCLI()
@@ -393,7 +443,7 @@ Examples:
         cli.console.print("[green]CVE cache updated.[/green]")
         cli.console.print(str(summary))
 
-    if not args.target:
+    if not args.target and not args.resume:
         if args.update_cve_cache:
             try:
                 asyncio.run(_warm_cve_cache())
@@ -489,6 +539,10 @@ Examples:
             cli.console.print(f"[red]CVE cache update failed: {e}[/red]")
             return 1
 
+    if args.safe and args.aggressive:
+        cli.console.print("[red]Choose only one mode: --safe or --aggressive.[/red]")
+        return 1
+
     try:
         result = asyncio.run(
             cli.run_scan(
@@ -535,6 +589,14 @@ Examples:
                 xxe_scan=args.xxe,
                 dom_scan=args.dom,
                 cms_detect=args.cms,
+                safe_mode=args.safe,
+                aggressive_mode=args.aggressive,
+                resume_state_file=args.resume,
+                checkpoint_dir=args.checkpoint_dir,
+                jsonl_output=args.jsonl_output,
+                siem_target=args.siem,
+                baseline_file=args.baseline,
+                diff_output=args.diff_output,
             )
         )
 

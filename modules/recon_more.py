@@ -97,7 +97,7 @@ SERVICE_FINGERPRINTS = {
         "pattern": "Not found",
         "status": [404],
     },
-    " JFrog": {
+    "jfrog": {
         "domains": ["jfrog.io", "jfrog.com"],
         "pattern": "404 Not Found",
         "status": [404],
@@ -116,7 +116,7 @@ SERVICE_FINGERPRINTS = {
 
 COMMON_SUBDOMAINS = [
     "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "webdisk",
-    "ns2", " registrar", "dns", "www2", "admin", "forum", "news", "vpn",
+    "ns2", "registrar", "dns", "www2", "admin", "forum", "news", "vpn",
     "ns", "mail2", "new", "mysql", "old", "lists", "secure", "static",
     "demo", "cloud", "dev", "staging", "test", "api", "cdn", "assets",
     "img", "files", "storage", "backup", "proxy", "router", "gate", "mx",
@@ -302,7 +302,7 @@ class SubdomainTakeover:
                     result["vulnerable"] = True
                     result["evidence"] = f"Status {status}"
 
-                elif any(p.lower() in body.lower() for p in [patterns] if p):
+                elif patterns and re.search(patterns, body, flags=re.IGNORECASE):
                     result["vulnerable"] = True
                     result["evidence"] = f"Matched pattern: {patterns}"
 

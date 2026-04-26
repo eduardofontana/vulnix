@@ -26,7 +26,12 @@ from modules.cloud_metadata import CloudMetadataDetector
 from modules.waf_detector import WAFDetector
 from modules.websocket import WebSocketTester
 from modules.cve_intel import CVEIntelligenceDetector
-from modules.recon import SubdomainEnumerator, TechnologyFingerprinter, PortScanner, DNSLookup
+from modules.recon import (
+    SubdomainEnumerator as ReconSubdomainEnumerator,
+    TechnologyFingerprinter,
+    PortScanner,
+    DNSLookup,
+)
 from modules.bugbounty import (
     ParameterBruteforcer, CORSAnalyzer, JWTAnalyzer,
     HTTPHeaderInjection, OpenRedirectTester, ServerSideRequestForgery
@@ -37,7 +42,6 @@ from modules.linkextractor import LinkExtractor
 from modules.graphql import GraphQLScanner
 from modules.rate_limit import RateLimitDetector
 from modules.recon_more import (
-    SubdomainEnumerator,
     SubdomainTakeover,
     WaybackAnalyzer,
     WHOISLookup,
@@ -98,6 +102,7 @@ class ScanEngine:
         scan_config: Optional[ScanConfig] = None,
         vuln_config: Optional[VulnerabilityConfig] = None,
         verbose: bool = False,
+        proxy_url: Optional[str] = None,
     ):
         self.scan_config = scan_config or ScanConfig()
         self.vuln_config = vuln_config or VulnerabilityConfig()
@@ -109,6 +114,7 @@ class ScanEngine:
             delay=self.scan_config.delay,
             follow_redirects=self.scan_config.follow_redirects,
             verify_ssl=self.scan_config.verify_ssl,
+            proxy_url=proxy_url,
         )
 
         self.crawler = Crawler(
@@ -167,7 +173,7 @@ class ScanEngine:
         self.cve_detector = CVEIntelligenceDetector()
         self.cve_detector.set_offline(self.vuln_config.cve_intel_offline)
 
-        self.subdomain_enum = SubdomainEnumerator(
+        self.subdomain_enum = ReconSubdomainEnumerator(
             request_engine=self.request_engine,
         )
 
@@ -253,7 +259,6 @@ class ScanEngine:
         self.do_xxe: bool = False
         self.do_dom: bool = False
         self.do_cms: bool = False
-        self.do_ssti: bool = False
         self._error_collectors: Dict[str, ModuleErrorCollector] = {}
         self._captured_error_signatures: Set[tuple] = set()
 
@@ -808,9 +813,13 @@ class ScanEngine:
                     default={},
                 )
                 inferred_versions = self.tech_fingerprint.get_last_versions()
+                inferred_confidence = self.tech_fingerprint.get_confidence_scores()
+                inferred_evidence_sources = self.tech_fingerprint.get_evidence_sources()
                 for tech, found in inferred_techs.items():
                     if found:
                         version = inferred_versions.get(tech)
+                        confidence = inferred_confidence.get(tech)
+                        evidence_sources = inferred_evidence_sources.get(tech, [])
                         tech_candidates.add(self._compose_tech_label(tech, version))
                         description = f"Detected: {tech}"
                         if version:
@@ -821,6 +830,10 @@ class ScanEngine:
                                 "url": target_url,
                                 "severity": "info",
                                 "description": description,
+                                "details": {
+                                    "confidence": confidence,
+                                    "evidence_sources": evidence_sources,
+                                },
                             }
                         )
 
@@ -947,9 +960,13 @@ class ScanEngine:
                 default={},
             )
             tech_versions = self.tech_fingerprint.get_last_versions()
+            tech_confidence = self.tech_fingerprint.get_confidence_scores()
+            tech_evidence_sources = self.tech_fingerprint.get_evidence_sources()
             for tech, found in techs.items():
                 if found:
                     version = tech_versions.get(tech)
+                    confidence = tech_confidence.get(tech)
+                    evidence_sources = tech_evidence_sources.get(tech, [])
                     description = f"Detected: {tech}"
                     if version:
                         description = f"Detected: {tech} (version: {version})"
@@ -958,6 +975,10 @@ class ScanEngine:
                         "url": target_url,
                         "severity": "info",
                         "description": description,
+                        "details": {
+                            "confidence": confidence,
+                            "evidence_sources": evidence_sources,
+                        },
                     })
 
         if self.do_dns_lookup:

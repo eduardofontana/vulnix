@@ -7,7 +7,6 @@ import asyncio
 import time
 import httpx
 from typing import Optional, Dict, Any
-from urllib.parse import urljoin, urlparse
 import random
 
 from core.error_collector import ModuleErrorCollector
@@ -33,6 +32,7 @@ class RequestEngine:
         verify_ssl: bool = True,
         rate_limit: int = 10,
         random_delay: bool = False,
+        proxy_url: Optional[str] = None,
     ):
         self.timeout = timeout
         self.max_retries = max_retries
@@ -45,6 +45,7 @@ class RequestEngine:
         self._last_request_time = 0.0
         self._request_count = 0
         self._client: Optional[httpx.AsyncClient] = None
+        self.proxy_url = proxy_url
         self.error_collector = ModuleErrorCollector("request_engine")
 
     def _get_random_user_agent(self) -> str:
@@ -85,6 +86,7 @@ class RequestEngine:
                 timeout=httpx.Timeout(self.timeout),
                 follow_redirects=self.follow_redirects,
                 verify=self.verify_ssl,
+                proxy=self.proxy_url,
             )
 
         for attempt in range(self.max_retries):
@@ -97,7 +99,7 @@ class RequestEngine:
                     content=content,
                     headers=default_headers,
                     cookies=merged_cookies,
-                    allow_redirects=allow_redirects,
+                    follow_redirects=allow_redirects,
                     timeout=timeout,
                 )
 
@@ -128,6 +130,7 @@ class RequestEngine:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         cookies: Optional[dict] = None,
+        allow_redirects: bool = True,
         timeout: Optional[float] = None,
     ) -> Optional[httpx.Response]:
         """Send a GET request."""
@@ -137,6 +140,7 @@ class RequestEngine:
             params=params,
             headers=headers,
             cookies=cookies,
+            allow_redirects=allow_redirects,
             timeout=timeout,
         )
 
@@ -147,6 +151,7 @@ class RequestEngine:
         content: Optional[bytes] = None,
         headers: Optional[dict] = None,
         cookies: Optional[dict] = None,
+        allow_redirects: bool = True,
         timeout: Optional[float] = None,
     ) -> Optional[httpx.Response]:
         """Send a POST request."""
@@ -157,6 +162,7 @@ class RequestEngine:
             content=content,
             headers=headers,
             cookies=cookies,
+            allow_redirects=allow_redirects,
             timeout=timeout,
         )
 
@@ -287,6 +293,13 @@ class RequestEngine:
 
     async def close(self) -> None:
         """Close underlying HTTP client."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def set_proxy(self, proxy_url: Optional[str]) -> None:
+        """Update proxy configuration and reset client pool."""
+        self.proxy_url = proxy_url
         if self._client is not None:
             await self._client.aclose()
             self._client = None

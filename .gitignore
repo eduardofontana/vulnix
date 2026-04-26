@@ -2,3 +2,5 @@
 *.py[cod]
 .pytest_cache/
 reports/
+vulnix_state.json
+checkpoints/

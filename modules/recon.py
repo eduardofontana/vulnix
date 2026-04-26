@@ -5,7 +5,6 @@ Fast passive subdomain enumeration from multiple sources
 
 import asyncio
 import re
-import socket
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
 import httpx
@@ -284,18 +283,24 @@ class PortScanner:
     async def check_port(self, host: str, port: int) -> Dict[str, Any]:
         """Check if port is open and get basic info."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
-            result = sock.connect_ex((host, port))
-            sock.close()
-
-            if result == 0:
+            reader = None
+            writer = None
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=self.timeout,
+                )
                 return {
                     "port": port,
                     "open": True,
                     "service": self.SERVICE_NAMES.get(port, "unknown"),
                 }
-            return {"port": port, "open": False, "service": None}
+            except (asyncio.TimeoutError, OSError):
+                return {"port": port, "open": False, "service": None}
+            finally:
+                if writer is not None:
+                    writer.close()
+                    await writer.wait_closed()
 
         except Exception as e:
             self.error_collector.add(f"{host}:{port}", e, "check_port")
@@ -306,10 +311,6 @@ class PortScanner:
     ) -> Dict[int, Dict[str, Any]]:
         """Scan a range of ports."""
         results = {}
-        tasks = []
-
-        for port in range(start_port, end_port + 1):
-            tasks.append(self.check_port(host, port))
 
         semaphore = asyncio.Semaphore(self.concurrent)
 
@@ -397,6 +398,8 @@ class TechnologyFingerprinter:
         self.request_engine = request_engine
         self.error_collector = ModuleErrorCollector("tech_fingerprint")
         self.last_versions: Dict[str, str] = {}
+        self.last_confidence_scores: Dict[str, int] = {}
+        self.last_evidence_sources: Dict[str, List[str]] = {}
 
     @staticmethod
     def _extract_version(value: str) -> Optional[str]:
@@ -410,18 +413,19 @@ class TechnologyFingerprinter:
         """Fingerprint technologies."""
         results = {}
         self.last_versions = {}
+        self.last_confidence_scores = {}
+        self.last_evidence_sources = {}
 
         try:
-            import httpx
-
-            async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-                response = await client.get(url)
+            response = await self.request_engine.get(
+                url,
+                timeout=15,
+            )
 
             if not response:
                 return {}
 
             headers_dict = dict(response.headers)
-            headers_text = " ".join([f"{k}: {v}" for k, v in response.headers.items()]).lower()
             html_text = response.text.lower()
             server_header = headers_dict.get("server", "").lower()
             powered_by = headers_dict.get("x-powered-by", "").lower()
@@ -445,20 +449,32 @@ class TechnologyFingerprinter:
             }
 
             for tech, patterns in tech_signatures.items():
+                confidence = 0
+                evidence_sources: List[str] = []
                 if patterns.get("server") and any(sig in server_header for sig in patterns["server"]):
                     results[tech] = True
+                    confidence += 60
+                    evidence_sources.append("server_header")
                     if tech in {"nginx", "apache", "iis", "vercel", "cloudflare", "aws"}:
                         version = self._extract_version(server_header)
                         if version:
                             self.last_versions[tech] = version
                 if patterns.get("powered") and any(sig in powered_by for sig in patterns["powered"]):
                     results[tech] = True
+                    confidence += 30
+                    evidence_sources.append("x_powered_by")
                     if tech in {"nextjs", "php"}:
                         version = self._extract_version(powered_by)
                         if version:
                             self.last_versions[tech] = version
                 if patterns.get("html") and any(sig in html_text for sig in patterns["html"]):
                     results[tech] = True
+                    confidence += 15
+                    evidence_sources.append("html_signature")
+
+                if tech in results:
+                    self.last_confidence_scores[tech] = min(confidence, 100)
+                    self.last_evidence_sources[tech] = evidence_sources
 
         except Exception as e:
             self.error_collector.add(url, e, "fingerprint")
@@ -468,6 +484,14 @@ class TechnologyFingerprinter:
     def get_last_versions(self) -> Dict[str, str]:
         """Return version hints detected in the latest fingerprint run."""
         return dict(self.last_versions)
+
+    def get_confidence_scores(self) -> Dict[str, int]:
+        """Return confidence scores for the latest fingerprint run."""
+        return dict(self.last_confidence_scores)
+
+    def get_evidence_sources(self) -> Dict[str, List[str]]:
+        """Return evidence source labels for latest fingerprint run."""
+        return {k: list(v) for k, v in self.last_evidence_sources.items()}
 
     def get_errors(self) -> List[Dict[str, Any]]:
         return self.error_collector.all()
