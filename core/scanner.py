@@ -5,6 +5,7 @@ Scan Engine - Coordinates crawling, fuzzing, and vulnerability detection
 
 import asyncio
 import json
+import re
 from typing import Dict, List, Optional, Any, Set, Callable, Union
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,7 @@ from modules.http_desync import HTTPDesyncDetector
 from modules.cloud_metadata import CloudMetadataDetector
 from modules.waf_detector import WAFDetector
 from modules.websocket import WebSocketTester
+from modules.cve_intel import CVEIntelligenceDetector
 from modules.recon import SubdomainEnumerator, TechnologyFingerprinter
 from modules.bugbounty import (
     ParameterBruteforcer, CORSAnalyzer, JWTAnalyzer,
@@ -137,6 +139,9 @@ class ScanEngine:
             request_engine=self.request_engine,
         )
 
+        self.cve_detector = CVEIntelligenceDetector()
+        self.cve_detector.set_offline(self.vuln_config.cve_intel_offline)
+
         self.subdomain_enum = SubdomainEnumerator(
             request_engine=self.request_engine,
         )
@@ -198,6 +203,25 @@ class ScanEngine:
         if finding_type == "ssrf" and subtype.startswith("cloud_metadata"):
             return "cloud_metadata"
         return finding_type
+
+    @staticmethod
+    def _extract_tech_version_from_description(description: str) -> tuple[Optional[str], Optional[str]]:
+        """Extract technology and optional version from 'Detected:' descriptions."""
+        if not description.startswith("Detected:"):
+            return None, None
+        label = description.replace("Detected:", "", 1).strip()
+        version_match = re.search(r"\(version:\s*([^)]+)\)", label, re.IGNORECASE)
+        if version_match:
+            version = version_match.group(1).strip()
+            tech = re.sub(r"\(version:\s*([^)]+)\)", "", label, flags=re.IGNORECASE).strip()
+            return (tech or None), (version or None)
+        return (label or None), None
+
+    @staticmethod
+    def _compose_tech_label(tech: str, version: Optional[str]) -> str:
+        if version:
+            return f"{tech}@{version}"
+        return tech
 
     def _record_error(
         self,
@@ -294,6 +318,7 @@ class ScanEngine:
             (self.cloud_metadata_detector, "cloud_metadata"),
             (self.waf_detector, "waf_detector"),
             (self.websocket_tester, "websocket"),
+            (self.cve_detector, "cve_intel"),
             (self.subdomain_enum, "subdomain_enum"),
             (self.tech_fingerprint, "tech_fingerprint"),
             (self.param_fuzzer, "param_fuzz"),
@@ -655,6 +680,52 @@ class ScanEngine:
             )
             all_findings.extend(websocket_findings)
 
+        if self.vuln_config.enable_cve_intel:
+            if progress_callback:
+                progress_callback("Correlating CVEs from technology fingerprint...")
+
+            tech_candidates = set()
+            for finding in all_findings:
+                if finding.get("type") == "technology":
+                    desc = str(finding.get("description", ""))
+                    tech_name, tech_version = self._extract_tech_version_from_description(desc)
+                    if tech_name:
+                        tech_candidates.add(self._compose_tech_label(tech_name, tech_version))
+
+            if not tech_candidates:
+                inferred_techs = await self._execute_step(
+                    module="tech_fingerprint",
+                    url=target_url,
+                    phase="cve_prereq",
+                    operation=lambda: self.tech_fingerprint.fingerprint(target_url),
+                    default={},
+                )
+                inferred_versions = self.tech_fingerprint.get_last_versions()
+                for tech, found in inferred_techs.items():
+                    if found:
+                        version = inferred_versions.get(tech)
+                        tech_candidates.add(self._compose_tech_label(tech, version))
+                        description = f"Detected: {tech}"
+                        if version:
+                            description = f"Detected: {tech} (version: {version})"
+                        all_findings.append(
+                            {
+                                "type": "technology",
+                                "url": target_url,
+                                "severity": "info",
+                                "description": description,
+                            }
+                        )
+
+            cve_findings = await self._execute_step(
+                module="cve_intel",
+                url=target_url,
+                phase="scan",
+                operation=lambda: self.cve_detector.scan(target_url, sorted(tech_candidates)),
+                default=[],
+            )
+            all_findings.extend(cve_findings)
+
         run_cors = self.quick_scan or self.do_cors_check
         run_jwt = self.quick_scan or self.do_jwt_check
         run_ssrf = self.quick_scan or self.do_ssrf_check
@@ -768,13 +839,18 @@ class ScanEngine:
                 operation=lambda: self.tech_fingerprint.fingerprint(target_url),
                 default={},
             )
+            tech_versions = self.tech_fingerprint.get_last_versions()
             for tech, found in techs.items():
                 if found:
+                    version = tech_versions.get(tech)
+                    description = f"Detected: {tech}"
+                    if version:
+                        description = f"Detected: {tech} (version: {version})"
                     all_findings.append({
                         "type": "technology",
                         "url": target_url,
                         "severity": "info",
-                        "description": f"Detected: {tech}",
+                        "description": description,
                     })
 
         for finding_data in all_findings:

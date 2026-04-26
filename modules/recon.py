@@ -282,10 +282,20 @@ class TechnologyFingerprinter:
     def __init__(self, request_engine: RequestEngine):
         self.request_engine = request_engine
         self.error_collector = ModuleErrorCollector("tech_fingerprint")
+        self.last_versions: Dict[str, str] = {}
+
+    @staticmethod
+    def _extract_version(value: str) -> Optional[str]:
+        """Extract semantic-like version from header snippets."""
+        if not value:
+            return None
+        match = re.search(r"\b(\d+(?:\.\d+){1,3}(?:[-_a-zA-Z0-9\.]+)?)\b", value)
+        return match.group(1) if match else None
 
     async def fingerprint(self, url: str) -> Dict[str, bool]:
         """Fingerprint technologies."""
         results = {}
+        self.last_versions = {}
 
         try:
             import httpx
@@ -323,8 +333,16 @@ class TechnologyFingerprinter:
             for tech, patterns in tech_signatures.items():
                 if patterns.get("server") and any(sig in server_header for sig in patterns["server"]):
                     results[tech] = True
+                    if tech in {"nginx", "apache", "iis", "vercel", "cloudflare", "aws"}:
+                        version = self._extract_version(server_header)
+                        if version:
+                            self.last_versions[tech] = version
                 if patterns.get("powered") and any(sig in powered_by for sig in patterns["powered"]):
                     results[tech] = True
+                    if tech in {"nextjs", "php"}:
+                        version = self._extract_version(powered_by)
+                        if version:
+                            self.last_versions[tech] = version
                 if patterns.get("html") and any(sig in html_text for sig in patterns["html"]):
                     results[tech] = True
 
@@ -332,6 +350,10 @@ class TechnologyFingerprinter:
             self.error_collector.add(url, e, "fingerprint")
 
         return results
+
+    def get_last_versions(self) -> Dict[str, str]:
+        """Return version hints detected in the latest fingerprint run."""
+        return dict(self.last_versions)
 
     def get_errors(self) -> List[Dict[str, Any]]:
         return self.error_collector.all()

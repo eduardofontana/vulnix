@@ -37,6 +37,8 @@ class VulnerabilityConfig:
     enable_waf_detection: bool = False
     enable_waf_bypass: bool = False
     enable_websocket: bool = False
+    enable_cve_intel: bool = False
+    cve_intel_offline: bool = False
 
 
 @dataclass

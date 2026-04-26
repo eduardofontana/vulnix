@@ -22,6 +22,7 @@ from modules.cloud_metadata import CloudMetadataDetector
 from modules.http_desync import HTTPDesyncDetector
 from modules.waf_detector import WAFDetector
 from modules.websocket import WebSocketTester
+from modules.cve_intel import CVEIntelligenceDetector
 from core.state import ScanState
 from modules.bugbounty import (
     JWTAnalyzer,
@@ -1093,6 +1094,58 @@ def test_websocket_tester_collects_errors():
     assert tester.get_errors()[0]["module"] == "websocket"
 
 
+def test_cve_intelligence_detector_builds_enriched_findings():
+    detector = CVEIntelligenceDetector()
+
+    detector.intel_client.search_nvd = AsyncMock(return_value=[
+        {
+            "cve_id": "CVE-2024-12345",
+            "description": "Sample issue",
+            "cvss": 8.8,
+            "published": "2024-01-01T00:00:00.000",
+            "last_modified": "2024-02-01T00:00:00.000",
+            "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-12345"],
+        }
+    ])
+    detector.intel_client.get_kev_cves = AsyncMock(return_value={"CVE-2024-12345"})
+    detector.intel_client.get_epss_scores = AsyncMock(return_value={
+        "CVE-2024-12345": {"epss": 0.91, "percentile": 0.99}
+    })
+
+    findings = asyncio.run(detector.scan("https://example.com", ["nextjs@14.2.1"]))
+
+    assert len(findings) == 1
+    assert findings[0]["type"] == "cve_intel"
+    assert findings[0]["details"]["cve_id"] == "CVE-2024-12345"
+    assert findings[0]["details"]["kev"] is True
+    assert findings[0]["details"]["confidence"] == "firm"
+    assert findings[0]["details"]["detected_version"] == "14.2.1"
+
+
+def test_cve_intelligence_detector_does_not_elevate_without_version_hint():
+    detector = CVEIntelligenceDetector()
+
+    detector.intel_client.search_nvd = AsyncMock(return_value=[
+        {
+            "cve_id": "CVE-2024-5555",
+            "description": "Medium issue",
+            "cvss": 5.6,
+            "published": "2024-01-01T00:00:00.000",
+            "last_modified": "2024-02-01T00:00:00.000",
+            "references": [],
+        }
+    ])
+    detector.intel_client.get_kev_cves = AsyncMock(return_value={"CVE-2024-5555"})
+    detector.intel_client.get_epss_scores = AsyncMock(return_value={})
+
+    findings = asyncio.run(detector.scan("https://example.com", ["nextjs"]))
+
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "medium"
+    assert findings[0]["details"]["confidence"] == "plausible"
+    assert findings[0]["details"]["detected_version"] is None
+
+
 def test_scan_state_collects_errors_on_save_failure():
     state = ScanState(state_file="vulnix_state.json")
 
@@ -1260,6 +1313,35 @@ def test_scan_engine_websocket_feature_runs_when_enabled():
     assert scanner.websocket_tester.discover.await_count == 1
     called_url = scanner.websocket_tester.test_endpoint.await_args.args[0]
     assert called_url == "wss://example.com/ws"
+
+
+def test_scan_engine_cve_intel_feature_runs_when_enabled():
+    vuln_config = VulnerabilityConfig(
+        enable_sqli=False,
+        enable_xss=False,
+        enable_headers=False,
+        enable_cve_intel=True,
+    )
+    scanner = ScanEngine(vuln_config=vuln_config)
+    scanner.crawl_target = AsyncMock(return_value=[])
+    scanner.tech_fingerprint.fingerprint = AsyncMock(return_value={"nextjs": True, "react": True})
+    scanner.cve_detector.scan = AsyncMock(return_value=[
+        {
+            "type": "cve_intel",
+            "module": "cve_intel",
+            "severity": "high",
+            "url": "https://example.com",
+            "description": "Potential CVE match for technology 'next.js': CVE-2024-12345",
+            "evidence": "Matched NVD by keyword",
+            "details": {"cve_id": "CVE-2024-12345"},
+        }
+    ])
+
+    result = asyncio.run(scanner.full_scan("https://example.com"))
+
+    assert any(f.type == "cve_intel" for f in result.findings)
+    assert scanner.tech_fingerprint.fingerprint.await_count == 1
+    assert scanner.cve_detector.scan.await_count == 1
 
 
 if __name__ == "__main__":

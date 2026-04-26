@@ -92,12 +92,19 @@ python run.py https://example.com \
   --waf \
   --waf-bypass \
   --websocket \
+  --cve-intel \
   --subs \
   --param-fuzz \
   --tech \
   --format both \
   -o reports/scan_full \
   -v
+```
+
+### Atualizar cache CVE (sem scan)
+
+```bash
+python run.py --update-cve-cache
 ```
 
 ---
@@ -119,6 +126,9 @@ python run.py https://example.com \
 | `--waf` | Habilita detecção de WAF | `false` |
 | `--waf-bypass` | Habilita testes de bypass de WAF | `false` |
 | `--websocket` | Habilita testes de segurança WebSocket | `false` |
+| `--cve-intel` | Habilita correlação de CVEs (NVD + KEV + EPSS) | `false` |
+| `--cve-intel-offline` | Usa apenas cache local para CVE intel | `false` |
+| `--update-cve-cache` | Atualiza cache local de CVEs antes do scan (ou isolado) | `false` |
 | `--subs` | Habilita enumeração de subdomínios | `false` |
 | `--subs-brute` | Habilita brute-force de subdomínios | `false` |
 | `--param-fuzz` | Habilita fuzz de parâmetros | `false` |

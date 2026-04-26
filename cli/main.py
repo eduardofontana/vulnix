@@ -8,6 +8,7 @@ import sys
 
 from cli.commands import VulnixCLI
 from config.settings import ScanConfig, VulnerabilityConfig
+from core.cve_intel import CVEIntelClient
 
 
 def main():
@@ -108,6 +109,24 @@ Examples:
     )
 
     parser.add_argument(
+        "--cve-intel",
+        action="store_true",
+        help="Enable CVE intelligence correlation (NVD + KEV + EPSS)",
+    )
+
+    parser.add_argument(
+        "--cve-intel-offline",
+        action="store_true",
+        help="Use local cache only for CVE intelligence (no external requests)",
+    )
+
+    parser.add_argument(
+        "--update-cve-cache",
+        action="store_true",
+        help="Refresh local CVE cache (NVD + KEV + EPSS) before scanning",
+    )
+
+    parser.add_argument(
         "-o", "--output",
         type=str,
         help="Output file prefix (will generate .json, .html, .txt)",
@@ -191,8 +210,28 @@ Examples:
 
     args = parser.parse_args()
 
+    cli = VulnixCLI()
+
+    async def _warm_cve_cache() -> None:
+        client = CVEIntelClient()
+        warm_techs = [
+            "nginx", "apache", "iis", "php", "nodejs", "express",
+            "django", "flask", "wordpress", "react", "nextjs",
+        ]
+        summary = await client.warm_cache(warm_techs, max_results_per_tech=20)
+        cli.print_banner()
+        cli.console.print("[green]CVE cache updated.[/green]")
+        cli.console.print(str(summary))
+
     if not args.target:
-        cli = VulnixCLI()
+        if args.update_cve_cache:
+            try:
+                asyncio.run(_warm_cve_cache())
+                return 0
+            except Exception as e:
+                cli.console.print(f"[red]CVE cache update failed: {e}[/red]")
+                return 1
+
         cli.print_banner()
         cli.print_disclaimer()
         cli.console.print("\n[yellow]Usage:[/yellow] vulnix <target> [options]")
@@ -221,6 +260,7 @@ Examples:
             "enable_waf_detection": False,
             "enable_waf_bypass": False,
             "enable_websocket": False,
+            "enable_cve_intel": False,
         },
         "standard": {
             "enable_sqli": True,
@@ -235,6 +275,7 @@ Examples:
             "enable_waf_detection": False,
             "enable_waf_bypass": False,
             "enable_websocket": False,
+            "enable_cve_intel": False,
         },
         "deep": {
             "enable_sqli": True,
@@ -249,6 +290,7 @@ Examples:
             "enable_waf_detection": True,
             "enable_waf_bypass": True,
             "enable_websocket": True,
+            "enable_cve_intel": True,
         },
     }
     selected_mode = mode_defaults[args.mode]
@@ -266,9 +308,16 @@ Examples:
         enable_waf_detection=selected_mode["enable_waf_detection"] or args.waf,
         enable_waf_bypass=selected_mode["enable_waf_bypass"] or args.waf_bypass,
         enable_websocket=selected_mode["enable_websocket"] or args.websocket,
+        enable_cve_intel=selected_mode["enable_cve_intel"] or args.cve_intel,
+        cve_intel_offline=args.cve_intel_offline,
     )
 
-    cli = VulnixCLI()
+    if args.update_cve_cache:
+        try:
+            asyncio.run(_warm_cve_cache())
+        except Exception as e:
+            cli.console.print(f"[red]CVE cache update failed: {e}[/red]")
+            return 1
 
     try:
         result = asyncio.run(

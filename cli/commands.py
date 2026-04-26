@@ -306,6 +306,7 @@ class VulnixCLI:
                     "Fuzzing hidden parameters": 98,
                     "Enumerating subdomains": 99,
                     "Fingerprinting technologies": 99,
+                    "Correlating CVEs from technology fingerprint": 99,
                 }
 
                 async def animate_progress() -> None:

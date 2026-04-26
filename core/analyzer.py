@@ -100,7 +100,7 @@ class ReportGenerator:
 
     def _build_module_insights(self, findings: List[Finding]) -> Dict[str, List[Dict[str, Any]]]:
         """Build enriched per-module findings with evidence/remediation."""
-        modules_of_interest = {"http_desync", "cloud_metadata", "waf", "websocket"}
+        modules_of_interest = {"http_desync", "cloud_metadata", "waf", "websocket", "cve_intel"}
         grouped: Dict[str, List[Dict[str, Any]]] = {m: [] for m in modules_of_interest}
 
         for finding in findings:
