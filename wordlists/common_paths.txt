@@ -1,0 +1,112 @@
+admin
+administrator
+login
+admin.php
+admin.html
+login.php
+dashboard
+cpanel
+phpmyadmin
+mysql
+sql
+database
+config
+backup
+backup.tar.gz
+backup.zip
+dump
+db
+data
+upload
+uploads
+file
+files
+images
+img
+api
+ws
+rest
+graphql
+graphiql
+console
+debug
+test
+dev
+staging
+wp-admin
+wp-content
+wp-includes
+wordpress
+joomla
+drupal
+magento
+shop
+cart
+checkout
+order
+user
+users
+profile
+account
+settings
+.git
+.svn
+.env
+.htaccess
+server-status
+server-info
+info
+phpinfo
+phpinfo.php
+status
+health
+metrics
+actuator
+manager
+panel
+control
+secure
+auth
+logout
+register
+signup
+forgot
+password
+reset
+config.php
+settings.php
+includes
+library
+libs
+classes
+functions
+vendor
+node_modules
+python
+.env.local
+debug.php
+trace
+logs
+shell
+bash
+console.php
+ celery
+ beanstalk
+ postgres
+ mssql
+ oracle
+ mongo
+ redis
+ elastic
+ kibana
+ grafana
+ prometheus
+ aws
+ s3
+ ftp
+ ssh
+ rdp
+ vnc
+ telnet
+ proxy
+ vpn
